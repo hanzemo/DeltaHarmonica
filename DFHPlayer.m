@@ -1,5 +1,7 @@
 #import "DFHPlayer.h"
 #import <UIKit/UIKit.h>
+#import <mach/mach_time.h>
+#import <unistd.h>
 
 /* =====================================================================
  * DFHPlayer.m

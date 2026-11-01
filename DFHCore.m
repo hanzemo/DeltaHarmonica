@@ -2,6 +2,8 @@
 #import "DFHForeground.h"
 #import <UIKit/UIKit.h>
 #import <mach/mach_time.h>
+#import <unistd.h>
+#import <math.h>
 
 /* =====================================================================
  * DFHCore.m — 核心实现（SpringBoard 注入版）
