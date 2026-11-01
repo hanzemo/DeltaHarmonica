@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 #include <roothide.h>
 #import "DFHCore.h"
 #import "DFHForeground.h"
@@ -11,13 +12,17 @@
  *
  * 注入目标：SpringBoard（系统级），不对游戏进程做任何注入（防封号）。
  *
- * 面板触发：在三角洲内按「音量下键」打开/关闭控制面板。
- *   实现方式：hook SpringBoard 的 SBVolumeControl / _SBVolumeControl，
- *   在音量下调时判断前台是否为三角洲，是则弹面板并吞掉音量变化。
+ * 面板触发：仅当「前台是三角洲」时，按「音量下键」打开/关闭控制面板。
+ *   实现：多层 hook 兜底
+ *     1. SpringBoard -_volumeChanged:（最底层 IOHID 音量事件）
+ *     2. SBVolumeControl -decreaseVolume / _decreaseVolume
+ *     3. _SBVolumeControl -decreaseVolume / _decreaseVolume
+ *   任一层命中即拦截（不调 %orig），音量不变，并切换面板。
+ *   非三角洲前台：一律 %orig，音量键正常。
  *
- * 其它入口（保留）：
- *   - Darwin 通知 com.hanzemo.deltaharmonica.panel（dfhctl panel）
- *   - 启动后 1 秒自动弹一次（便于验证注入是否成功）
+ * 其它入口：
+ *   - Darwin 通知 com.hanzemo.deltaharmonica.toggle（dfhctl panel）
+ *   - 启动 1 秒后自动弹一次（仅用于验证注入，正式可删）
  *
  * Bundle ID（查证结果）：
  *   国服（腾讯天游） com.tencent.tmgp.dfm
@@ -32,12 +37,14 @@ static CFStringRef const kDFHNotifyStop   = CFSTR("com.hanzemo.deltaharmonica.st
 static CFStringRef const kDFHNotifyReplay = CFSTR("com.hanzemo.deltaharmonica.replay");
 static CFStringRef const kDFHNotifyToggle = CFSTR("com.hanzemo.deltaharmonica.toggle");
 
+/* ---------------- Debug 宏 ---------------- */
+#define DFHLOG(fmt, ...) NSLog(@"[DFH] " fmt, ##__VA_ARGS__)
+
 /* ---------------- 乐谱目录 ---------------- */
 static NSString *DFHMidiDirectory(void) {
     static NSString *dir = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        /* roothide：用 jbroot() 定位越狱根下的目录（jbroot 随机化，不能硬编码 /var/jb） */
         NSString *base = jbroot(@"/var/mobile/Documents/DeltaHarmonica");
         dir = base;
         [[NSFileManager defaultManager] createDirectoryAtPath:dir
@@ -51,21 +58,18 @@ static NSString *DFHMidiDirectory(void) {
 static void DFHPlayMidiFile(NSString *fileName) {
     NSString *path = [DFHMidiDirectory() stringByAppendingPathComponent:fileName];
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) {
-        NSLog(@"[DFH] 未找到 MIDI：%@", path);
+        DFHLOG(@"未找到 MIDI：%@", path);
         return;
     }
-
-    /* 起播前白名单校验：前台必须是三角洲，否则拒绝播放 */
     if (!DFHIsDeltaForceForeground()) {
-        NSLog(@"[DFH] 拒绝播放：前台 App 非三角洲（%@）", DFHCurrentFrontmostBundleID() ?: @"未知");
+        DFHLOG(@"拒绝播放：前台 App 非三角洲（%@）", DFHCurrentFrontmostBundleID() ?: @"未知");
         return;
     }
-
     NSError *err = nil;
     DFHMIDIResult *res = [DFHMIDIParser parseFileAtPath:path error:&err];
-    if (!res) { NSLog(@"[DFH] 解析失败：%@", err.localizedDescription); return; }
+    if (!res) { DFHLOG(@"解析失败：%@", err.localizedDescription); return; }
     [[NSUserDefaults standardUserDefaults] setObject:fileName forKey:@"lastMidi"];
-    NSLog(@"[DFH] 播放 %@：%lu 音符 BPM=%.1f", fileName, (unsigned long)res.notes.count, res.bpm);
+    DFHLOG(@"播放 %@：%lu 音符 BPM=%.1f", fileName, (unsigned long)res.notes.count, res.bpm);
     [[DFHPlayer shared] playResult:res];
 }
 
@@ -89,11 +93,9 @@ static UIWindow *gDFHWindow = nil;
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    /* 关键：确保 view 有有效尺寸，否则子视图全按 0 宽高布局 */
     self.view.frame = self.view.bounds;
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-
-    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
+    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];   /* 深色半透明，不红块 */
     self.view.layer.cornerRadius = 16;
     self.view.clipsToBounds = YES;
 
@@ -104,7 +106,6 @@ static UIWindow *gDFHWindow = nil;
     }
     CGFloat topY = 8;
 
-    /* 标题 + 关闭 */
     UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-80, 32)];
     title.text = @"三角洲口琴 · 控制台";
     title.textColor = [UIColor whiteColor];
@@ -120,7 +121,6 @@ static UIWindow *gDFHWindow = nil;
 
     topY += 40;
 
-    /* 状态标签 */
     self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
     self.statusLabel.text = @"就绪";
     self.statusLabel.textColor = [UIColor systemGreenColor];
@@ -128,7 +128,6 @@ static UIWindow *gDFHWindow = nil;
     [self.view addSubview:self.statusLabel];
     topY += 26;
 
-    /* 乐谱列表 */
     UILabel *listHead = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
     listHead.text = @"乐谱（.mid）";
     listHead.textColor = [UIColor lightGrayColor];
@@ -145,7 +144,6 @@ static UIWindow *gDFHWindow = nil;
 
     topY += self.table.frame.size.height;
 
-    /* 底部按钮行 */
     NSArray *buttons = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
     CGFloat bw = (w - 12*2 - 8*(buttons.count-1)) / (CGFloat)buttons.count;
     CGFloat bx = 12;
@@ -161,6 +159,7 @@ static UIWindow *gDFHWindow = nil;
         [self.view addSubview:b];
         bx += bw + 8;
     }
+    DFHLOG(@"PanelVC viewDidLoad: bounds=%@", NSStringFromCGRect(self.view.bounds));
 }
 
 - (void)viewDidLayoutSubviews {
@@ -172,6 +171,7 @@ static UIWindow *gDFHWindow = nil;
 
 - (void)hidePanel {
     gDFHWindow.hidden = YES;
+    DFHLOG(@"面板隐藏（收起按钮）");
 }
 
 - (void)buttonTapped:(UIButton *)b {
@@ -202,7 +202,7 @@ static UIWindow *gDFHWindow = nil;
 
 - (void)startCalibration {
     self.statusLabel.text = @"标定：请依次点 13 键（见 README）";
-    NSLog(@"[DFH] 开始标定流程（UI 简化版）");
+    DFHLOG(@"开始标定流程（UI 简化版）");
 }
 
 - (void)refreshList {
@@ -270,17 +270,19 @@ static void DFHShowPanel(void) {
             gDFHWindow = [[UIWindow alloc] initWithFrame:wr];
             gDFHWindow.rootViewController = [DFHPanelViewController new];
             gDFHWindow.backgroundColor = [UIColor clearColor];
+            DFHLOG(@"创建窗口: %@", NSStringFromCGRect(wr));
         }
         gDFHWindow.windowLevel = UIWindowLevelAlert + 1000;
         gDFHWindow.hidden = NO;
-        NSLog(@"[DFH] ShowPanel: window=%@ hidden=%d level=%.0f",
-              gDFHWindow, gDFHWindow.hidden, gDFHWindow.windowLevel);
+        DFHLOG(@"ShowPanel: window=%@ hidden=%d level=%.0f",
+               gDFHWindow, gDFHWindow.hidden, gDFHWindow.windowLevel);
     });
 }
 
 static void DFHHidePanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (gDFHWindow) gDFHWindow.hidden = YES;
+        DFHLOG(@"HidePanel");
     });
 }
 
@@ -288,70 +290,68 @@ static BOOL DFHPanelVisible(void) {
     return gDFHWindow && !gDFHWindow.hidden;
 }
 
-/* ---------------- 音量下键 hook（SpringBoard） ---------------- */
+/* 统一处理一次“音量下”事件：只在三角洲前台拦截，并切换面板。
+ * 返回 YES 表示已拦截（不要继续调 %orig）。 */
+static BOOL DFHHandleVolumeDownFrom(const char *where) {
+    NSString *bid = DFHCurrentFrontmostBundleID();
+    BOOL df = DFHIsDeltaForceForeground();
+    DFHLOG(@"音量下事件命中[%s] 前台=%@ 三角洲=%d 面板可见=%d",
+           where, bid ?: @"nil", df, DFHPanelVisible());
 
-/* SpringBoard 的音量控制类在不同 iOS 版本名字不同：
- *   iOS 14 及以前：SBVolumeControl
- *   iOS 15/16+：_SBVolumeControl（或 SBVolumeControl 仍存在）
- * 这里两个都 hook，用 %group 保护，类不存在时 Logos 会跳过该组。
- *
- * 音量键事件最终走到 -[<类> _handleVolumeDownButtonEvent:] /
- * -[<类> handleVolumeDownButtonEvent:]（不同版本命名），以及
- * -[<类> decreaseVolume] / -[<类> _decreaseVolume]。
- * 我们 hook 这几处，在前台是三角洲时拦截并弹面板。
- */
+    if (!df) return NO;   /* 非三角洲，放行音量 */
 
-static BOOL DFHShouldInterceptVolumeDown(void) {
-    return DFHIsDeltaForceForeground();
+    if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+    return YES;           /* 吞掉音量变化 */
 }
 
-%group VolumeHook
+/* ---------------- 音量下键多层 hook ---------------- */
+
+/* 第 1 层：SpringBoard -_volumeChanged:（最底层，参数是 IOHIDEventRef）
+ * 注意：_volumeChanged: 同时会在音量上/下时触发，需要通过事件方向判断。
+ * 这里保守做法：只在 decrease 类方法里拦截；_volumeChanged: 仅作日志观察，
+ * 避免误拦音量上。若 decrease 层都没命中，再启用本层的“强制拦截”。 */
+%group SpringBoardVolumeHook
+%hook SpringBoard
+
+- (BOOL)_volumeChanged:(struct __IOHIDEvent *)event {
+    BOOL df = DFHIsDeltaForceForeground();
+    DFHLOG(@"SpringBoard _volumeChanged: 前台=%@ 三角洲=%d 面板可见=%d",
+           DFHCurrentFrontmostBundleID() ?: @"nil", df, DFHPanelVisible());
+    /* 默认放行，避免误拦音量上；decrease 层命中时会自行 return，不走到这里 */
+    return %orig;
+}
+
+%end
+%end
+
+/* 第 2/3 层：SBVolumeControl / _SBVolumeControl 的 decrease 方法。
+ * 这两个类名在不同 iOS 版本存在差异，两个都 hook，用 %group 保护，
+ * 类不存在时 Logos 会跳过该组。 */
+%group VolumeControlHook
 
 %hook SBVolumeControl
-
 - (void)decreaseVolume {
-    if (DFHShouldInterceptVolumeDown()) {
-        NSLog(@"[DFH] 音量下被拦截 → 切换面板");
-        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
-        return;  /* 吞掉音量变化 */
-    }
+    if (DFHHandleVolumeDownFrom("SBVolumeControl decreaseVolume")) return;
     %orig;
 }
-
 - (void)_decreaseVolume {
-    if (DFHShouldInterceptVolumeDown()) {
-        NSLog(@"[DFH] 音量下(_)被拦截 → 切换面板");
-        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
-        return;
-    }
+    if (DFHHandleVolumeDownFrom("SBVolumeControl _decreaseVolume")) return;
     %orig;
 }
-
 %end
 
 %hook _SBVolumeControl
-
 - (void)decreaseVolume {
-    if (DFHShouldInterceptVolumeDown()) {
-        NSLog(@"[DFH] 音量下被拦截 → 切换面板");
-        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
-        return;
-    }
+    if (DFHHandleVolumeDownFrom("_SBVolumeControl decreaseVolume")) return;
     %orig;
 }
-
 - (void)_decreaseVolume {
-    if (DFHShouldInterceptVolumeDown()) {
-        NSLog(@"[DFH] 音量下(_)被拦截 → 切换面板");
-        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
-        return;
-    }
+    if (DFHHandleVolumeDownFrom("_SBVolumeControl _decreaseVolume")) return;
     %orig;
 }
-
 %end
 
-%end /* VolumeHook */
+%end /* VolumeControlHook */
 
 /* ---------------- 通知回调 ---------------- */
 
@@ -370,7 +370,31 @@ static void DFHNotifyCallback(CFNotificationCenterRef center, void *observer,
     } else if (CFStringCompare(name, kDFHNotifyReplay, 0) == kCFCompareEqualTo) {
         DFHReplayLast();
     } else if (CFStringCompare(name, kDFHNotifyToggle, 0) == kCFCompareEqualTo) {
+        DFHLOG(@"收到 toggle 通知 → ShowPanel");
         DFHShowPanel();
+    }
+}
+
+/* ---------------- Debug：启动时打印类/方法是否存在 ---------------- */
+
+static void DFHDebugDumpVolumeClasses(void) {
+    const char *names[] = { "SBVolumeControl", "_SBVolumeControl", "VolumeControl", "SpringBoard" };
+    for (size_t i = 0; i < sizeof(names)/sizeof(names[0]); i++) {
+        Class c = objc_getClass(names[i]);
+        DFHLOG(@"class %s = %@", names[i], c ? NSStringFromClass(c) : @"(null)");
+        if (!c) continue;
+
+        unsigned int count = 0;
+        Method *methods = class_copyMethodList(c, &count);
+        for (unsigned int j = 0; j < count; j++) {
+            const char *sel = sel_getName(method_getName(methods[j]));
+            if (strstr(sel, "volume") || strstr(sel, "Volume") ||
+                strstr(sel, "decrease") || strstr(sel, "Decrease") ||
+                strstr(sel, "down") || strstr(sel, "Down")) {
+                DFHLOG(@"  %s -%s", names[i], sel);
+            }
+        }
+        free(methods);
     }
 }
 
@@ -379,9 +403,13 @@ static void DFHNotifyCallback(CFNotificationCenterRef center, void *observer,
 __attribute__((constructor))
 static void DFHInit(void) {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+    DFHLOG(@"构造器进入：bundle=%@", bundleId);
     if (![bundleId isEqualToString:@"com.apple.springboard"]) {
+        DFHLOG(@"非 SpringBoard，跳过初始化");
         return;
     }
+
+    DFHDebugDumpVolumeClasses();
 
     CFNotificationCenterRef nc = CFNotificationCenterGetDarwinNotifyCenter();
     CFNotificationCenterAddObserver(nc, NULL, DFHNotifyCallback, kDFHNotifyPlay, NULL,
@@ -393,14 +421,14 @@ static void DFHInit(void) {
     CFNotificationCenterAddObserver(nc, NULL, DFHNotifyCallback, kDFHNotifyToggle, NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    /* 激活音量键 hook 组 */
-    %init(VolumeHook);
+    %init(SpringBoardVolumeHook);
+    %init(VolumeControlHook);
 
-    /* 启动 1 秒后自动弹一次，便于验证注入是否成功（正式使用可删掉这段） */
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
+        DFHLOG(@"启动 1s 自动弹面板（验证用）");
         DFHShowPanel();
     });
 
-    NSLog(@"[DFH] DeltaHarmonica 已注入 SpringBoard（音量下键唤起面板）");
+    DFHLOG(@"DeltaHarmonica 已注入 SpringBoard（音量下键唤起面板，仅三角洲生效）");
 }
