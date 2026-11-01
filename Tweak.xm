@@ -12,17 +12,16 @@
  *
  * 注入目标：SpringBoard（系统级），不对游戏进程做任何注入（防封号）。
  *
- * 面板触发：仅当「前台是三角洲」时，按「音量下键」打开/关闭控制面板。
+ * 面板触发：仅当「前台是三角洲」时，按「音量下键」打开控制面板。
  *   实现：多层 hook 兜底
- *     1. SpringBoard -_volumeChanged:（最底层 IOHID 音量事件）
+ *     1. SpringBoard -_volumeChanged:（最底层 IOHID 音量事件，仅日志观察）
  *     2. SBVolumeControl -decreaseVolume / _decreaseVolume
  *     3. _SBVolumeControl -decreaseVolume / _decreaseVolume
- *   任一层命中即拦截（不调 %orig），音量不变，并切换面板。
+ *   任一层命中即拦截（不调 %orig），音量不变，并显示面板。
  *   非三角洲前台：一律 %orig，音量键正常。
  *
  * 其它入口：
  *   - Darwin 通知 com.hanzemo.deltaharmonica.toggle（dfhctl panel）
- *   - 启动 1 秒后自动弹一次（仅用于验证注入，正式可删）
  *
  * Bundle ID（查证结果）：
  *   国服（腾讯天游） com.tencent.tmgp.dfm
@@ -37,7 +36,7 @@ static CFStringRef const kDFHNotifyStop   = CFSTR("com.hanzemo.deltaharmonica.st
 static CFStringRef const kDFHNotifyReplay = CFSTR("com.hanzemo.deltaharmonica.replay");
 static CFStringRef const kDFHNotifyToggle = CFSTR("com.hanzemo.deltaharmonica.toggle");
 
-/* ---------------- Debug 宏 ---------------- */
+/* ---------------- Debug 宏（写文件，绕过真机 log 命令限制） ---------------- */
 #define DFHLOG(fmt, ...) do { \
     NSString *s = [NSString stringWithFormat:@"[DFH] " fmt "\n", ##__VA_ARGS__]; \
     NSString *p = @"/var/mobile/Documents/dfh.log"; \
@@ -86,6 +85,14 @@ static void DFHReplayLast(void) {
 /* ---------------- 设置界面（悬浮窗） ---------------- */
 
 static UIWindow *gDFHWindow = nil;
+
+/* iOS 13+ SpringBoard 里普通 UIWindow 未必能成为 key window，
+ * 用子类重写 canBecomeKeyWindow 提升显示成功率。 */
+@interface DFHPanelWindow : UIWindow
+@end
+@implementation DFHPanelWindow
+- (BOOL)canBecomeKeyWindow { return YES; }
+@end
 
 @interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
 @property (nonatomic, strong) UITableView *table;
@@ -272,15 +279,29 @@ static void DFHShowPanel(void) {
             CGFloat w = MIN(r.size.width * 0.9, 420);
             CGFloat h = MIN(r.size.height * 0.7, 520);
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
-            gDFHWindow = [[UIWindow alloc] initWithFrame:wr];
+
+            gDFHWindow = [[DFHPanelWindow alloc] initWithFrame:wr];
+
+            /* iOS 13+：窗口必须关联到当前前台 active 的 UIWindowScene 才能显示 */
+            if (@available(iOS 13.0, *)) {
+                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                    if (scene.activationState == UISceneActivationStateForegroundActive &&
+                        [scene isKindOfClass:[UIWindowScene class]]) {
+                        gDFHWindow.windowScene = (UIWindowScene *)scene;
+                        break;
+                    }
+                }
+            }
+
             gDFHWindow.rootViewController = [DFHPanelViewController new];
             gDFHWindow.backgroundColor = [UIColor clearColor];
-            DFHLOG(@"创建窗口: %@", NSStringFromCGRect(wr));
+            DFHLOG(@"创建窗口: %@ windowScene=%@",
+                   NSStringFromCGRect(wr), gDFHWindow.windowScene);
         }
         gDFHWindow.windowLevel = UIWindowLevelAlert + 1000;
         gDFHWindow.hidden = NO;
-        DFHLOG(@"ShowPanel: window=%@ hidden=%d level=%.0f",
-               gDFHWindow, gDFHWindow.hidden, gDFHWindow.windowLevel);
+        DFHLOG(@"ShowPanel: window=%@ hidden=%d level=%.0f windowScene=%@",
+               gDFHWindow, gDFHWindow.hidden, gDFHWindow.windowLevel, gDFHWindow.windowScene);
     });
 }
 
@@ -295,7 +316,7 @@ static BOOL DFHPanelVisible(void) {
     return gDFHWindow && !gDFHWindow.hidden;
 }
 
-/* 统一处理一次“音量下”事件：只在三角洲前台拦截，并切换面板。
+/* 统一处理一次“音量下”事件：只在三角洲前台拦截，并确保面板显示。
  * 返回 YES 表示已拦截（不要继续调 %orig）。 */
 static BOOL DFHHandleVolumeDownFrom(const char *where) {
     NSString *bid = DFHCurrentFrontmostBundleID();
@@ -305,16 +326,15 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
 
     if (!df) return NO;   /* 非三角洲，放行音量 */
 
-    if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+    if (!DFHPanelVisible()) DFHShowPanel();   /* 只在不可见时显示，不切换隐藏 */
     return YES;           /* 吞掉音量变化 */
 }
 
 /* ---------------- 音量下键多层 hook ---------------- */
 
 /* 第 1 层：SpringBoard -_volumeChanged:（最底层，参数是 IOHIDEventRef）
- * 注意：_volumeChanged: 同时会在音量上/下时触发，需要通过事件方向判断。
- * 这里保守做法：只在 decrease 类方法里拦截；_volumeChanged: 仅作日志观察，
- * 避免误拦音量上。若 decrease 层都没命中，再启用本层的“强制拦截”。 */
+ * _volumeChanged: 同时会在音量上/下时触发，这里只做日志观察，不拦截，
+ * 避免误拦音量上。decrease 层命中时会自行 return，不走到这里。 */
 %group SpringBoardVolumeHook
 %hook SpringBoard
 
@@ -322,7 +342,6 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
     BOOL df = DFHIsDeltaForceForeground();
     DFHLOG(@"SpringBoard _volumeChanged: 前台=%@ 三角洲=%d 面板可见=%d",
            DFHCurrentFrontmostBundleID() ?: @"nil", df, DFHPanelVisible());
-    /* 默认放行，避免误拦音量上；decrease 层命中时会自行 return，不走到这里 */
     return %orig;
 }
 
@@ -429,11 +448,6 @@ static void DFHInit(void) {
     %init(SpringBoardVolumeHook);
     %init(VolumeControlHook);
 
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        DFHLOG(@"启动 1s 自动弹面板（验证用）");
-        DFHShowPanel();
-    });
-
+    /* 已删掉启动 1s 自动弹面板：正式使用只靠音量下键 / dfhctl panel 唤起 */
     DFHLOG(@"DeltaHarmonica 已注入 SpringBoard（音量下键唤起面板，仅三角洲生效）");
 }
