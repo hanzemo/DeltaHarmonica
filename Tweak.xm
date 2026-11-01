@@ -13,12 +13,15 @@
  * 注入目标：SpringBoard（系统级），不对游戏进程做任何注入（防封号）。
  *
  * 面板触发：仅当「前台是三角洲」时，按「音量下键」打开控制面板。
- *   实现：多层 hook 兜底
- *     1. SpringBoard -_volumeChanged:（最底层 IOHID 音量事件，仅日志观察）
- *     2. SBVolumeControl -decreaseVolume / _decreaseVolume
- *     3. _SBVolumeControl -decreaseVolume / _decreaseVolume
- *   任一层命中即拦截（不调 %orig），音量不变，并显示面板。
+ *   多层 hook 兜底：SpringBoard -_volumeChanged:（仅日志）、
+ *   SBVolumeControl / _SBVolumeControl 的 decreaseVolume / _decreaseVolume。
  *   非三角洲前台：一律 %orig，音量键正常。
+ *
+ * 面板特性：
+ *   - 顶部标题栏可拖动移动窗口
+ *   - 「⤢」按钮在小/中/大三档尺寸间循环
+ *   - 30 秒无操作自动隐藏（不暂停播放）
+ *   - 「🎯 标定」进入 12 键标定界面，逐个点屏幕取坐标
  *
  * 其它入口：
  *   - Darwin 通知 com.hanzemo.deltaharmonica.toggle（dfhctl panel）
@@ -82,22 +85,150 @@ static void DFHReplayLast(void) {
     if (last.length) DFHPlayMidiFile(last);
 }
 
-/* ---------------- 设置界面（悬浮窗） ---------------- */
+/* ---------------- 悬浮窗 ---------------- */
 
 static UIWindow *gDFHWindow = nil;
 
-/* iOS 13+ SpringBoard 里普通 UIWindow 未必能成为 key window，
- * 用子类重写 canBecomeKeyWindow 提升显示成功率。 */
 @interface DFHPanelWindow : UIWindow
 @end
 @implementation DFHPanelWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 @end
 
+/* 12 个键的名字（与 DFHCore.h 的宏顺序一致） */
+static NSArray<NSString *> *DFHKeyNames(void) {
+    static NSArray *names = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        names = @[@"do", @"re", @"mi", @"fa", @"sol", @"la", @"si",
+                  @"高音 do", @"低音区", @"中音区", @"高音区", @"半音"];
+    });
+    return names;
+}
+
+@class DFHPanelViewController;
+
+/* ---------------- 标定界面 ---------------- */
+
+@interface DFHCalibrationViewController : UIViewController
+@property (nonatomic, strong) UITableView *table;
+@property (nonatomic, copy) void (^onFinish)(void);
+- (instancetype)initWithFinishBlock:(void (^)(void))block;
+@end
+
+@implementation DFHCalibrationViewController
+
+- (instancetype)initWithFinishBlock:(void (^)(void))block {
+    if (self = [super init]) { self.onFinish = block; }
+    return self;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.98];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, self.view.bounds.size.width - 80, 32)];
+    title.text = @"口琴键位标定";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:16];
+    [self.view addSubview:title];
+
+    UIButton *back = [UIButton buttonWithType:UIButtonTypeSystem];
+    back.frame = CGRectMake(self.view.bounds.size.width - 60, 8, 48, 32);
+    [back setTitle:@"返回" forState:UIControlStateNormal];
+    [back addTarget:self action:@selector(goBack) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:back];
+
+    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, 48, self.view.bounds.size.width, self.view.bounds.size.height - 48)
+                                              style:UITableViewStylePlain];
+    self.table.dataSource = self;
+    self.table.delegate = self;
+    self.table.backgroundColor = [UIColor clearColor];
+    [self.view addSubview:self.table];
+}
+
+- (void)goBack {
+    if (self.onFinish) self.onFinish();
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
+    (void)tv; (void)s;
+    return DFH_TOTAL_KEYS;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
+    static NSString *cid = @"calCell";
+    UITableViewCell *c = [tv dequeueReusableCellWithIdentifier:cid];
+    if (!c) {
+        c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:cid];
+        c.backgroundColor = [UIColor clearColor];
+        c.textLabel.textColor = [UIColor whiteColor];
+        c.detailTextLabel.textColor = [UIColor lightGrayColor];
+    }
+    BOOL valid = NO;
+    CGPoint p = DFHLoadCoord(ip.row, &valid);
+    c.textLabel.text = DFHKeyNames()[ip.row];
+    c.detailTextLabel.text = valid
+        ? [NSString stringWithFormat:@"%.0f, %.0f", p.x, p.y]
+        : @"未标定";
+    c.detailTextLabel.textColor = valid ? [UIColor systemGreenColor] : [UIColor systemRedColor];
+    return c;
+}
+
+- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [tv deselectRowAtIndexPath:ip animated:YES];
+    [self startPickForIndex:ip.row];
+}
+
+- (void)startPickForIndex:(NSInteger)idx {
+    /* 全屏透明遮罩，接管一次点击取坐标 */
+    UIViewController *picker = [UIViewController new];
+    picker.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
+    picker.modalPresentationStyle = UIModalPresentationOverFullScreen;
+
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, [UIScreen mainScreen].bounds.size.width, 44)];
+    hint.text = [NSString stringWithFormat:@"请点击「%@」在屏幕上的位置", DFHKeyNames()[idx]];
+    hint.textAlignment = NSTextAlignmentCenter;
+    hint.textColor = [UIColor whiteColor];
+    hint.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+    hint.font = [UIFont systemFontOfSize:15];
+    [picker.view addSubview:hint];
+
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handlePickTap:)];
+    tap.numberOfTapsRequired = 1;
+    [picker.view addGestureRecognizer:tap];
+
+    objc_setAssociatedObject(tap, "idx", @(idx), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+    [self presentViewController:picker animated:NO completion:nil];
+}
+
+- (void)handlePickTap:(UITapGestureRecognizer *)tap {
+    NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
+    NSInteger idx = idxNum.integerValue;
+    CGPoint p = [tap locationInView:tap.view];
+    DFHStoreCoord(idx, p);
+    DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
+
+    UIViewController *picker = tap.view.nextResponder;
+    while (picker && ![picker isKindOfClass:[UIViewController class]]) picker = picker.nextResponder;
+    if ([picker isKindOfClass:[UIViewController class]]) {
+        [picker dismissViewControllerAnimated:NO completion:nil];
+    }
+    [self.table reloadData];
+}
+
+@end
+
+/* ---------------- 主面板 ---------------- */
+
 @interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) NSArray<NSString *> *midiFiles;
 @property (nonatomic, strong) UILabel *statusLabel;
+@property (nonatomic, strong) NSTimer *autoHideTimer;
+@property (nonatomic, assign) NSInteger sizeLevel; /* 0 小 1 中 2 大 */
 @end
 
 @implementation DFHPanelViewController
@@ -105,9 +236,10 @@ static UIWindow *gDFHWindow = nil;
 - (void)viewDidLoad {
     [super viewDidLoad];
 
+    self.sizeLevel = 1;
     self.view.frame = self.view.bounds;
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];   /* 深色半透明，不红块 */
+    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
     self.view.layer.cornerRadius = 16;
     self.view.clipsToBounds = YES;
 
@@ -118,11 +250,19 @@ static UIWindow *gDFHWindow = nil;
     }
     CGFloat topY = 8;
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-80, 32)];
+    /* 标题 + 尺寸 + 关闭 */
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-140, 32)];
     title.text = @"三角洲口琴 · 控制台";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:16];
     [self.view addSubview:title];
+
+    UIButton *resize = [UIButton buttonWithType:UIButtonTypeSystem];
+    resize.frame = CGRectMake(w-110, topY, 44, 32);
+    [resize setTitle:@"⤢" forState:UIControlStateNormal];
+    [resize setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [resize addTarget:self action:@selector(cycleSize) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:resize];
 
     UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
     close.frame = CGRectMake(w-60, topY, 48, 32);
@@ -130,6 +270,14 @@ static UIWindow *gDFHWindow = nil;
     [close setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
     [close addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:close];
+
+    /* 标题栏拖动 */
+    UIView *dragBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 48)];
+    dragBar.backgroundColor = [UIColor clearColor];
+    [self.view addSubview:dragBar];
+    [self.view sendSubviewToBack:dragBar];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+    [dragBar addGestureRecognizer:pan];
 
     topY += 40;
 
@@ -171,7 +319,6 @@ static UIWindow *gDFHWindow = nil;
         [self.view addSubview:b];
         bx += bw + 8;
     }
-    DFHLOG(@"PanelVC viewDidLoad: bounds=%@", NSStringFromCGRect(self.view.bounds));
 }
 
 - (void)viewDidLayoutSubviews {
@@ -181,12 +328,64 @@ static UIWindow *gDFHWindow = nil;
     self.table.frame = CGRectMake(0, 96, w, h - 96 - 60);
 }
 
+/* ---- 拖动 ---- */
+- (void)handleDrag:(UIPanGestureRecognizer *)pan {
+    [self resetAutoHideTimer];
+    if (!gDFHWindow) return;
+    CGPoint t = [pan translationInView:nil];
+    CGRect f = gDFHWindow.frame;
+    f.origin.x += t.x;
+    f.origin.y += t.y;
+    gDFHWindow.frame = f;
+    [pan setTranslation:CGPointZero inView:nil];
+}
+
+/* ---- 尺寸循环 ---- */
+- (void)cycleSize {
+    [self resetAutoHideTimer];
+    if (!gDFHWindow) return;
+    self.sizeLevel = (self.sizeLevel + 1) % 3;
+    CGRect r = [UIScreen mainScreen].bounds;
+    CGFloat ratios[] = { 0.6, 0.75, 0.9 };
+    CGFloat ratio = ratios[self.sizeLevel];
+    CGFloat w = MIN(r.size.width * ratio, 520);
+    CGFloat h = MIN(r.size.height * ratio, 720);
+    CGRect f = gDFHWindow.frame;
+    f.size = CGSizeMake(w, h);
+    gDFHWindow.frame = f;
+    DFHLOG(@"尺寸切换 level=%ld → %.0fx%.0f", (long)self.sizeLevel, w, h);
+}
+
+/* ---- 自动隐藏 ---- */
+- (void)resetAutoHideTimer {
+    [self.autoHideTimer invalidate];
+    __weak typeof(self) weakSelf = self;
+    self.autoHideTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:NO block:^(NSTimer *t) {
+        DFHLOG(@"30s 无操作，自动隐藏（播放继续）");
+        gDFHWindow.hidden = YES;
+    }];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self refreshList];
+    [self resetAutoHideTimer];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [self.autoHideTimer invalidate];
+    self.autoHideTimer = nil;
+}
+
 - (void)hidePanel {
     gDFHWindow.hidden = YES;
-    DFHLOG(@"面板隐藏（收起按钮）");
+    [self.autoHideTimer invalidate];
+    DFHLOG(@"面板隐藏（收起按钮，播放继续）");
 }
 
 - (void)buttonTapped:(UIButton *)b {
+    [self resetAutoHideTimer];
     switch (b.tag) {
         case 0: {
             NSIndexPath *ip = self.table.indexPathForSelectedRow;
@@ -196,7 +395,7 @@ static UIWindow *gDFHWindow = nil;
         case 1: [[DFHPlayer shared] stop]; self.statusLabel.text = @"已停止"; break;
         case 2: DFHReplayLast(); break;
         case 3: [self importMidi]; break;
-        case 4: [self startCalibration]; break;
+        case 4: [self openCalibration]; break;
         case 5: {
             BOOL cur = DFHIsWhitelistEnabled();
             [[NSUserDefaults standardUserDefaults] setBool:!cur forKey:@"whiteListEnabled"];
@@ -207,14 +406,17 @@ static UIWindow *gDFHWindow = nil;
     }
 }
 
+- (void)openCalibration {
+    __weak typeof(self) weakSelf = self;
+    DFHCalibrationViewController *cal = [[DFHCalibrationViewController alloc] initWithFinishBlock:^{
+        [weakSelf refreshList];
+    }];
+    [self presentViewController:cal animated:YES completion:nil];
+}
+
 - (void)importMidi {
     [self refreshList];
     self.statusLabel.text = @"已刷新，请用 Filza 放入 .mid";
-}
-
-- (void)startCalibration {
-    self.statusLabel.text = @"标定：请依次点 13 键（见 README）";
-    DFHLOG(@"开始标定流程（UI 简化版）");
 }
 
 - (void)refreshList {
@@ -236,11 +438,6 @@ static UIWindow *gDFHWindow = nil;
                              fbid ?: @"未知",
                              dfOn ? @"✓可演奏" : @"✗非三角洲"];
     self.statusLabel.textColor = dfOn ? [UIColor systemGreenColor] : [UIColor systemRedColor];
-}
-
-- (void)viewWillAppear:(BOOL)animated {
-    [super viewWillAppear:animated];
-    [self refreshList];
 }
 
 #pragma mark - UITableView
@@ -265,6 +462,7 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
+    [self resetAutoHideTimer];
     DFHPlayMidiFile(self.midiFiles[ip.row]);
 }
 
@@ -276,13 +474,12 @@ static void DFHShowPanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gDFHWindow) {
             CGRect r = [UIScreen mainScreen].bounds;
-            CGFloat w = MIN(r.size.width * 0.9, 420);
+            CGFloat w = MIN(r.size.width * 0.75, 420);
             CGFloat h = MIN(r.size.height * 0.7, 520);
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
 
             gDFHWindow = [[DFHPanelWindow alloc] initWithFrame:wr];
 
-            /* iOS 13+：窗口必须关联到当前前台 active 的 UIWindowScene 才能显示 */
             if (@available(iOS 13.0, *)) {
                 for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
                     if (scene.activationState == UISceneActivationStateForegroundActive &&
@@ -317,17 +514,14 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
     DFHLOG(@"音量下事件命中[%s] 前台=%@ 三角洲=%d 面板可见=%d",
            where, bid ?: @"nil", df, DFHPanelVisible());
 
-    if (!df) return NO;   /* 非三角洲，放行音量 */
+    if (!df) return NO;
 
-    if (!DFHPanelVisible()) DFHShowPanel();   /* 只在不可见时显示，不切换隐藏 */
-    return YES;           /* 吞掉音量变化 */
+    if (!DFHPanelVisible()) DFHShowPanel();
+    return YES;
 }
 
 /* ---------------- 音量下键多层 hook ---------------- */
 
-/* 第 1 层：SpringBoard -_volumeChanged:（最底层，参数是 IOHIDEventRef）
- * _volumeChanged: 同时会在音量上/下时触发，这里只做日志观察，不拦截，
- * 避免误拦音量上。decrease 层命中时会自行 return，不走到这里。 */
 %group SpringBoardVolumeHook
 %hook SpringBoard
 
@@ -341,9 +535,6 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
 %end
 %end
 
-/* 第 2/3 层：SBVolumeControl / _SBVolumeControl 的 decrease 方法。
- * 这两个类名在不同 iOS 版本存在差异，两个都 hook，用 %group 保护，
- * 类不存在时 Logos 会跳过该组。 */
 %group VolumeControlHook
 
 %hook SBVolumeControl
@@ -441,6 +632,5 @@ static void DFHInit(void) {
     %init(SpringBoardVolumeHook);
     %init(VolumeControlHook);
 
-    /* 已删掉启动 1s 自动弹面板：正式使用只靠音量下键 / dfhctl panel 唤起 */
     DFHLOG(@"DeltaHarmonica 已注入 SpringBoard（音量下键唤起面板，仅三角洲生效）");
 }
