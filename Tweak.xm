@@ -110,7 +110,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 
 /* ---------------- 标定界面 ---------------- */
 
-@interface DFHCalibrationViewController : UIViewController
+@interface DFHCalibrationViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, copy) void (^onFinish)(void);
 - (instancetype)initWithFinishBlock:(void (^)(void))block;
@@ -211,10 +211,12 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     DFHStoreCoord(idx, p);
     DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
 
-    UIViewController *picker = tap.view.nextResponder;
-    while (picker && ![picker isKindOfClass:[UIViewController class]]) picker = picker.nextResponder;
-    if ([picker isKindOfClass:[UIViewController class]]) {
-        [picker dismissViewControllerAnimated:NO completion:nil];
+    UIResponder *responder = tap.view.nextResponder;
+    while (responder && ![responder isKindOfClass:[UIViewController class]]) {
+        responder = responder.nextResponder;
+    }
+    if ([responder isKindOfClass:[UIViewController class]]) {
+        [(UIViewController *)responder dismissViewControllerAnimated:NO completion:nil];
     }
     [self.table reloadData];
 }
@@ -359,7 +361,6 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 /* ---- 自动隐藏 ---- */
 - (void)resetAutoHideTimer {
     [self.autoHideTimer invalidate];
-    __weak typeof(self) weakSelf = self;
     self.autoHideTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:NO block:^(NSTimer *t) {
         DFHLOG(@"30s 无操作，自动隐藏（播放继续）");
         gDFHWindow.hidden = YES;
