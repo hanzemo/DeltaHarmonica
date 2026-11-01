@@ -1,7 +1,7 @@
 #import "DFHForeground.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
+#import <objc/message.h>          // ← 提供 objc_msgSend 声明
 
 /* =====================================================================
  * DFHForeground.m — 前台 App 白名单校验实现
@@ -31,12 +31,14 @@ BOOL DFHIsWhitelistEnabled(void) {
 
 static NSString *DFH_BundleIDOf(id app) {
     if (!app) return nil;
+
     /* 尝试 bundleIdentifier 属性 */
     SEL selBID = NSSelectorFromString(@"bundleIdentifier");
     if ([app respondsToSelector:selBID]) {
         NSString *bid = ((id (*)(id, SEL))objc_msgSend)(app, selBID);
         if (bid.length) return bid;
     }
+
     /* 尝试 bundleID 属性（旧 API，无公开声明，必须走 msgSend） */
     SEL selBIDOld = NSSelectorFromString(@"bundleID");
     if ([app respondsToSelector:selBIDOld]) {
@@ -78,11 +80,11 @@ NSString *DFHCurrentFrontmostBundleID(void) {
 }
 
 BOOL DFHIsDeltaForceForeground(void) {
-    if (!DFHIsWhitelistEnabled()) return YES;   /* 未启用白名单则放行（兼容旧行为） */
+    if (!DFHIsWhitelistEnabled()) return YES;   /* 未启用白名单则放行 */
     NSString *bid = DFHCurrentFrontmostBundleID();
     if (!bid) return NO;
     return [gDFHExtraBundles() containsObject:bid] ||
-           [bid hasPrefix:@"com.tencent"] ||    /* 兜底：腾讯系（可选，见 README） */
+           [bid hasPrefix:@"com.tencent"] ||    /* 兜底：腾讯系 */
            [bid hasPrefix:@"com.garena"];
 }
 
