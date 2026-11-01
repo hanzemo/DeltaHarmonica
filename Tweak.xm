@@ -76,7 +76,7 @@ static void DFHReplayLast(void) {
 
 static UIWindow *gDFHWindow = nil;
 
-@interface DFHPanelViewController : UIViewController
+@interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
 @property (nonatomic, strong) UITableView *table;
 @property (nonatomic, strong) NSArray<NSString *> *midiFiles;
 @property (nonatomic, strong) UILabel *statusLabel;
