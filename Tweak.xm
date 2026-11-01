@@ -11,11 +11,13 @@
  *
  * 注入目标：SpringBoard（系统级），不对游戏进程做任何注入（防封号）。
  *
- * 工作原理：
- *   1. SpringBoard 注入后创建一个系统级悬浮窗口（UIWindow，level=alert+），
- *      提供完整的设置/控制界面。
- *   2. 触摸通过 DFHCore 的 IOHID 全局派发，投递到当前前台 App（游戏）。
- *   3. 也监听 Darwin 通知，供命令行工具/Activator 触发。
+ * 面板触发：在三角洲内按「音量下键」打开/关闭控制面板。
+ *   实现方式：hook SpringBoard 的 SBVolumeControl / _SBVolumeControl，
+ *   在音量下调时判断前台是否为三角洲，是则弹面板并吞掉音量变化。
+ *
+ * 其它入口（保留）：
+ *   - Darwin 通知 com.hanzemo.deltaharmonica.panel（dfhctl panel）
+ *   - 启动后 1 秒自动弹一次（便于验证注入是否成功）
  *
  * Bundle ID（查证结果）：
  *   国服（腾讯天游） com.tencent.tmgp.dfm
@@ -86,11 +88,20 @@ static UIWindow *gDFHWindow = nil;
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+
+    /* 关键：确保 view 有有效尺寸，否则子视图全按 0 宽高布局 */
+    self.view.frame = self.view.bounds;
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
     self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
     self.view.layer.cornerRadius = 16;
     self.view.clipsToBounds = YES;
 
     CGFloat w = self.view.bounds.size.width;
+    if (w <= 1) {
+        w = [UIScreen mainScreen].bounds.size.width * 0.9;
+        self.view.frame = CGRectMake(0, 0, w, [UIScreen mainScreen].bounds.size.height * 0.7);
+    }
     CGFloat topY = 8;
 
     /* 标题 + 关闭 */
@@ -165,7 +176,7 @@ static UIWindow *gDFHWindow = nil;
 
 - (void)buttonTapped:(UIButton *)b {
     switch (b.tag) {
-        case 0: { /* 播放选中的 */
+        case 0: {
             NSIndexPath *ip = self.table.indexPathForSelectedRow;
             if (ip && ip.row < self.midiFiles.count) DFHPlayMidiFile(self.midiFiles[ip.row]);
             break;
@@ -174,7 +185,7 @@ static UIWindow *gDFHWindow = nil;
         case 2: DFHReplayLast(); break;
         case 3: [self importMidi]; break;
         case 4: [self startCalibration]; break;
-        case 5: { /* 白名单开关 */
+        case 5: {
             BOOL cur = DFHIsWhitelistEnabled();
             [[NSUserDefaults standardUserDefaults] setBool:!cur forKey:@"whiteListEnabled"];
             [[NSUserDefaults standardUserDefaults] synchronize];
@@ -185,8 +196,6 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)importMidi {
-    /* 在 SpringBoard 里 UIDocumentPicker 受限，改用：打开乐谱目录（提示用户用 Filza 放入）。
-     * 同时监听目录变化，刷新列表。 */
     [self refreshList];
     self.statusLabel.text = @"已刷新，请用 Filza 放入 .mid";
 }
@@ -208,7 +217,6 @@ static UIWindow *gDFHWindow = nil;
     self.midiFiles = [mids sortedArrayUsingSelector:@selector(compare:)];
     [self.table reloadData];
 
-    /* 状态：白名单 + 前台 App */
     NSString *fbid = DFHCurrentFrontmostBundleID();
     BOOL dfOn = DFHIsDeltaForceForeground();
     self.statusLabel.text = [NSString stringWithFormat:@"%lu 首 · 前台 %@ %@",
@@ -260,14 +268,90 @@ static void DFHShowPanel(void) {
             CGFloat h = MIN(r.size.height * 0.7, 520);
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
             gDFHWindow = [[UIWindow alloc] initWithFrame:wr];
-            gDFHWindow.windowLevel = UIWindowLevelAlert + 1;
             gDFHWindow.rootViewController = [DFHPanelViewController new];
             gDFHWindow.backgroundColor = [UIColor clearColor];
         }
+        gDFHWindow.windowLevel = UIWindowLevelAlert + 1000;
         gDFHWindow.hidden = NO;
-        [gDFHWindow makeKeyAndVisible];
+        NSLog(@"[DFH] ShowPanel: window=%@ hidden=%d level=%.0f",
+              gDFHWindow, gDFHWindow.hidden, gDFHWindow.windowLevel);
     });
 }
+
+static void DFHHidePanel(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gDFHWindow) gDFHWindow.hidden = YES;
+    });
+}
+
+static BOOL DFHPanelVisible(void) {
+    return gDFHWindow && !gDFHWindow.hidden;
+}
+
+/* ---------------- 音量下键 hook（SpringBoard） ---------------- */
+
+/* SpringBoard 的音量控制类在不同 iOS 版本名字不同：
+ *   iOS 14 及以前：SBVolumeControl
+ *   iOS 15/16+：_SBVolumeControl（或 SBVolumeControl 仍存在）
+ * 这里两个都 hook，用 %group 保护，类不存在时 Logos 会跳过该组。
+ *
+ * 音量键事件最终走到 -[<类> _handleVolumeDownButtonEvent:] /
+ * -[<类> handleVolumeDownButtonEvent:]（不同版本命名），以及
+ * -[<类> decreaseVolume] / -[<类> _decreaseVolume]。
+ * 我们 hook 这几处，在前台是三角洲时拦截并弹面板。
+ */
+
+static BOOL DFHShouldInterceptVolumeDown(void) {
+    return DFHIsDeltaForceForeground();
+}
+
+%group VolumeHook
+
+%hook SBVolumeControl
+
+- (void)decreaseVolume {
+    if (DFHShouldInterceptVolumeDown()) {
+        NSLog(@"[DFH] 音量下被拦截 → 切换面板");
+        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+        return;  /* 吞掉音量变化 */
+    }
+    %orig;
+}
+
+- (void)_decreaseVolume {
+    if (DFHShouldInterceptVolumeDown()) {
+        NSLog(@"[DFH] 音量下(_)被拦截 → 切换面板");
+        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%hook _SBVolumeControl
+
+- (void)decreaseVolume {
+    if (DFHShouldInterceptVolumeDown()) {
+        NSLog(@"[DFH] 音量下被拦截 → 切换面板");
+        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+        return;
+    }
+    %orig;
+}
+
+- (void)_decreaseVolume {
+    if (DFHShouldInterceptVolumeDown()) {
+        NSLog(@"[DFH] 音量下(_)被拦截 → 切换面板");
+        if (DFHPanelVisible()) DFHHidePanel(); else DFHShowPanel();
+        return;
+    }
+    %orig;
+}
+
+%end
+
+%end /* VolumeHook */
 
 /* ---------------- 通知回调 ---------------- */
 
@@ -295,7 +379,6 @@ static void DFHNotifyCallback(CFNotificationCenterRef center, void *observer,
 __attribute__((constructor))
 static void DFHInit(void) {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
-    /* 仅注入 SpringBoard（含前身 AppleTV 等忽略），避免任何游戏进程污染 */
     if (![bundleId isEqualToString:@"com.apple.springboard"]) {
         return;
     }
@@ -310,12 +393,14 @@ static void DFHInit(void) {
     CFNotificationCenterAddObserver(nc, NULL, DFHNotifyCallback, kDFHNotifyToggle, NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
-    /* 双击音量键/Activator 触发面板（简化：延时 1s 自动弹出一次便于验证，
-     * 正式使用请绑定 Activator 手势或命令行 toggle） */
+    /* 激活音量键 hook 组 */
+    %init(VolumeHook);
+
+    /* 启动 1 秒后自动弹一次，便于验证注入是否成功（正式使用可删掉这段） */
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         DFHShowPanel();
     });
 
-    NSLog(@"[DFH] DeltaHarmonica 已注入 SpringBoard（防封号模式）");
+    NSLog(@"[DFH] DeltaHarmonica 已注入 SpringBoard（音量下键唤起面板）");
 }
