@@ -1,6 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 /* =====================================================================
@@ -61,7 +65,7 @@ typedef NS_ENUM(NSInteger, DFHRegister) {
 
 /* 标定坐标存取 */
 BOOL   DFHStoreCoord(NSInteger keyIdx, CGPoint p);
-CGPoint DFHLoadCoord(NSInteger keyIdx, BOOL *valid);
+CGPoint DFHLoadCoord(NSInteger keyIdx, BOOL * _Nullable valid);
 
 /* 触摸注入：点击某编号键（内部读标定坐标），holdMs 为按住时长 */
 void DFHTapKey(NSInteger keyIdx, double holdMs);
@@ -70,3 +74,7 @@ void DFHTapKey(NSInteger keyIdx, double holdMs);
 void DFHTapAtPoint(CGPoint point, double holdMs);
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif
