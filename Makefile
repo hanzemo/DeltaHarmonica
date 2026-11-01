@@ -9,7 +9,7 @@
 #   - 产物需要 platform-application / no-sandbox 等 entitlements
 # =====================================================================
 
-TARGET := iphone:clang:latest:15.0
+TARGET := iphone:clang:16.5:15.0
 
 # roothide 打包方案（区别于标准 rootless 的固定 /var/jb，jbroot 随机化）
 THEOS_PACKAGE_SCHEME := roothide

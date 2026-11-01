@@ -1,107 +1,91 @@
 # =====================================================================
 # GitHub Actions CI — 编译 DeltaHarmonica 越狱插件（roothide）
 #
-# 方案：
-#   - macOS runner（自带 Xcode + iOS 交叉工具链，theos 官方要求）
-#   - roothide/theos fork（必须 --recursive 拉子模块，否则缺 dm.pl）
-#   - theos/sdks 社区 SDK（iPhoneOS16.5.sdk，含私有框架 tbd）
-#
-# 说明：runner 在 GitHub 机房，直连 github.com 最快最稳；
-#       USE_MIRROR=true 可切 gh-proxy 加速（国内/受限网络场景）。
+# 参照 roothide 项目成功模板，关键点：
+#   - actions/checkout + submodules:recursive 拉 roothide/theos（含 dm.pl）
+#   - brew 安装 ldid（签名工具）和 GNU make
+#   - 用 zip 下载 theos/sdks 并缓存
+#   - THEOS_PACKAGE_SCHEME=roothide 传参编译
 # =====================================================================
 
-name: Build Tweak
+name: build
 
 on:
   push:
     branches: [ main ]
   pull_request:
   workflow_dispatch:
-    inputs:
-      USE_MIRROR:
-        description: '使用 GitHub 加速镜像（true/false，默认 false 直连）'
-        required: false
-        default: 'false'
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
 
     env:
-      THEOS: "${{ github.workspace }}/theos"
+      DEVICE_TARGET: "iphone:clang:16.5:15.0"
 
     steps:
-      - name: Checkout
+      - name: checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: 决定是否使用加速镜像
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "USE_MIRROR=${{ github.event.inputs.USE_MIRROR }}" >> "$GITHUB_ENV"
-          else
-            echo "USE_MIRROR=false" >> "$GITHUB_ENV"
-          fi
+      - name: setup theos（roothide fork，含子模块）
+        uses: actions/checkout@v4
+        with:
+          repository: roothide/theos
+          path: theos
+          submodules: recursive
 
-      - name: 安装 roothide/theos（含子模块，直连）
-        if: env.USE_MIRROR != 'true'
-        run: |
-          set -eux
-          # 关键：--recursive 拉取 vendor/dm.pl、logos、headers、lib 等子模块
-          rm -rf "$THEOS"
-          git clone --depth 1 --recursive \
-            https://github.com/roothide/theos.git "$THEOS"
-          echo "=== theos 结构验证 ==="
-          ls "$THEOS"
-          echo "--- bin/dm.pl 是否存在（CI 报错的关键） ---"
-          ls -la "$THEOS/bin/dm.pl" "$THEOS/vendor/dm.pl/dm.pl" 2>&1 || true
+      - name: set THEOS env var
+        run: echo "THEOS=$GITHUB_WORKSPACE/theos" >> "$GITHUB_ENV"
 
-      - name: 安装 roothide/theos（含子模块，加速镜像）
-        if: env.USE_MIRROR == 'true'
+      - name: install deps（ldid + GNU make）
         run: |
-          set -eux
-          rm -rf "$THEOS"
-          # 镜像模式下，git clone 主仓库走镜像，子模块 URL 用 insteadOf 重写
-          git config --global url."https://gh-proxy.com/https://github.com/".insteadOf "https://github.com/"
-          git clone --depth 1 --recursive \
-            https://gh-proxy.com/https://github.com/roothide/theos.git "$THEOS"
-          ls "$THEOS/bin/dm.pl" 2>&1 || true
+          brew install ldid make
+          echo "$(brew --prefix make)/libexec/gnubin" >> "$GITHUB_PATH"
 
-      - name: 安装 iOS SDK（iPhoneOS16.5.sdk）
+      - name: cache sdks
+        id: cache-sdks
+        uses: actions/cache@v4
+        with:
+          path: theos/sdks
+          key: theos-sdks-16.5
+
+      - name: download sdks
+        if: steps.cache-sdks.outputs.cache-hit != 'true'
         run: |
-          set -eux
-          SDKS_REPO_URL="https://github.com/theos/sdks.git"
-          if [ "$USE_MIRROR" = "true" ]; then
-            SDKS_REPO_URL="https://gh-proxy.com/${SDKS_REPO_URL}"
-          fi
-          echo "拉取 theos/sdks：$SDKS_REPO_URL"
-          rm -rf /tmp/theos-sdks
-          git clone --depth 1 "$SDKS_REPO_URL" /tmp/theos-sdks
-          mkdir -p "$THEOS/sdks"
-          cp -R /tmp/theos-sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"
-          echo "=== SDK 验证 ==="
-          ls -la "$THEOS/sdks/iPhoneOS16.5.sdk/"
+          curl -LO https://github.com/theos/sdks/archive/master.zip
+          unzip -q master.zip
+          mkdir -p theos/sdks
+          mv sdks-master/*.sdk theos/sdks/
+          rm -rf master.zip sdks-master
+          echo "=== 已安装的 SDK ==="
+          ls -la theos/sdks/
 
       - name: 验证工具链
         run: |
-          set -eux
+          set -x
           xcodebuild -version
           clang --version
           echo "THEOS=$THEOS"
-          echo "=== 验证 dm.pl（README 排错的关键文件）==="
-          ls -la "$THEOS/bin/dm.pl" 2>&1 || echo "⚠️ dm.pl 缺失，检查子模块"
+          echo "=== 验证 dm.pl（关键：CI 之前报 requires dm.pl）==="
+          ls -la "$THEOS/bin/dm.pl" "$THEOS/vendor/dm.pl/dm.pl" 2>&1 || echo "⚠️ dm.pl 缺失"
+          echo "=== 验证 ldid ==="
+          which ldid && ldid 2>&1 | head -2 || echo "⚠️ ldid 缺失"
 
-      - name: 编译 .deb
+      - name: build roothide
         run: |
-          set -eux
-          cd "$GITHUB_WORKSPACE"
+          set -x
           make clean || true
-          make package
-          echo "=== 产物 ==="
-          ls -la packages/
+          make package \
+            ARCHS="arm64 arm64e" \
+            TARGET="$DEVICE_TARGET" \
+            FINALPACKAGE=1 \
+            THEOS_PACKAGE_SCHEME=roothide
 
-      - name: 上传 .deb
+      - name: upload package
         uses: actions/upload-artifact@v4
         with:
-          name: DeltaHarmonica-deb
+          name: DeltaHarmonica-roothide-package
           path: packages/*.deb
           if-no-files-found: error
