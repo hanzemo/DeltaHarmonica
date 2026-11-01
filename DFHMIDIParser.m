@@ -289,6 +289,8 @@ static void DFHRdSkip(DFHReader *r, NSUInteger n) {
     return res;
 }
 
+@end
+
 #pragma mark - 音高映射对外接口（供 DFHPlayer 使用）
 
 @implementation DFHMIDIParser (PitchMapping)
