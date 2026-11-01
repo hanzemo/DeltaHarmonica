@@ -1,6 +1,10 @@
 #import <Foundation/Foundation.h>
 #import <CoreGraphics/CoreGraphics.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 NS_ASSUME_NONNULL_BEGIN
 
 /* =====================================================================
@@ -30,3 +34,7 @@ BOOL DFHIsDeltaForceForeground(void);
 void DFHAddExtraBundleID(NSString *bundleID);
 
 NS_ASSUME_NONNULL_END
+
+#ifdef __cplusplus
+}
+#endif
