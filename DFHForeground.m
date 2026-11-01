@@ -1,6 +1,7 @@
 #import "DFHForeground.h"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 /* =====================================================================
  * DFHForeground.m — 前台 App 白名单校验实现
