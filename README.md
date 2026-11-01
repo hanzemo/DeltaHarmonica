@@ -66,12 +66,15 @@ digitizer 事件并全局派发到前台 App。演奏时把 MIDI 音符序列按
 ```
 DeltaHarmonica/
 ├── control                 # Debian 包元信息
-├── Makefile                # Theos 编译（tweak + 命令行工具）
+├── Makefile                # Theos 编译（roothide scheme，tweak + 命令行工具）
+├── entitlements.plist      # roothide entitlements（platform-application 等）
 ├── Tweak.xm                # 注入 SpringBoard + 悬浮窗设置界面 + 通知监听
 ├── DFHCore.h/.m            # IOHID 触摸注入（全局派发）+ 键位标定
+├── DFHForeground.h/.m      # 前台 App 白名单校验（防封号护栏）
 ├── DFHMIDIParser.h/.m      # 标准 MIDI 解析 + 音高→键位映射
 ├── DFHPlayer.h/.m          # 演奏调度器（时间轴派发）
-├── dfhctl.m                # 命令行触发工具（-> /usr/bin/dfhctl）
+├── dfhctl.m                # 命令行触发工具
+├── .github/workflows/      # GitHub Actions CI（roothide fork 编译）
 ├── layout/
 │   └── Library/PreferenceBundles/DeltaHarmonicaPrefs.bundle/
 └── README.md
@@ -79,21 +82,34 @@ DeltaHarmonica/
 
 ---
 
-## 三、编译
+## 三、编译（roothide）
 
 > 必须在 **macOS + Theos** 编译（iOS tweak 无法在 Linux 交叉编译）。
 
+**roothide 专用要点**（依据 roothide/Developer 官方规范）：
+
+1. 使用 **roothide/theos fork**（与官方 theos 100% 兼容，内置 roothide 支持）
+2. `THEOS_PACKAGE_SCHEME=roothide`（**非**标准 rootless）
+3. 源码访问越狱文件用 `jbroot()` API，**不硬编码 `/var/jb`**
+
 ```bash
-git clone --recursive https://github.com/theos/theos.git ~/theos
-# 放入 iPhoneOS16.0.sdk 到 ~/theos/sdks/
+# 1. 安装 roothide/theos
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/roothide/theos/master/bin/install-theos)"
+
+# 2. 放入 SDK（iPhoneOS16.5.sdk 到 ~/theos/sdks/，含私有框架 tbd）
+#    或直接克隆：git clone https://github.com/theos/sdks 并复制 iPhoneOS16.5.sdk
+
+# 3. 编译
 cd DeltaHarmonica
 make clean
-make package          # 生成 .deb（含 tweak + dfhctl）
+make package          # 生成 .deb（含 tweak + dfhctl，roothide scheme）
 make install          # 需配置 THEOS_DEVICE_IP/PORT
 ```
 
 产物 `packages/com.hanzemo.deltaharmonica_1.0.0_iphoneos-arm64.deb`，
 Sileo/Zebra 安装或 `dpkg -i`。
+
+> 也可用 GitHub Actions 自动编译：推送后 `.github/workflows/build.yml` 自动产出 .deb。
 
 ---
 
@@ -107,15 +123,16 @@ Sileo 勾选 DeltaHarmonica，注入目标是 SpringBoard；安装后 respring�
 - 命令行 `dfhctl panel` 可再次呼出
 - 悬浮窗可「收起」到边缘，随时点开
 
-### 3. 标定 13 键
+### 3. 标定 12 键
 1. 进入游戏 → 守夜人弹口琴界面（12 键完整显示）
 2. 控制台点「🎯 标定」
-3. 按提示依次点击：`do re mi fa sol la si do⁺`、低音区、中音区、高音区、半音
+3. 按提示依次点击：`do re mi fa sol la si 高音do`、低音区、中音区(普通)、高音区、半音
 4. 坐标存入偏好 `coord.0`~`coord.11`
 
 ### 4. 导入 MIDI
 - 点控制台「📂 导入」刷新列表
-- 用 Filza 把 `.mid` 放入 `Documents/DeltaHarmonica/`（roothide 下 `/var/jb/var/mobile/Documents/DeltaHarmonica`）
+- 用 Filza 把 `.mid` 放入 jbroot 的 `var/mobile/Documents/DeltaHarmonica/`
+  （roothide 下实际路径随机，代码里用 `jbroot(@"/var/mobile/Documents/DeltaHarmonica")` 自动定位）
 - 列表即显示，点选后按「▶ 播放」
 
 ### 5. 演奏控制
@@ -126,15 +143,17 @@ Sileo 勾选 DeltaHarmonica，注入目标是 SpringBoard；安装后 respring�
 | 🔁 重播 | 重播上一首 |
 | 📂 导入 | 刷新 MIDI 列表 |
 | 🎯 标定 | 进入标定流程 |
+| 🛡 白名单 | 开关前台 App 白名单护栏 |
 
 ### 6. 命令行工具 `dfhctl`
 
 ```bash
-/var/jb/usr/bin/dfhctl play song.mid   # 播放
-/var/jb/usr/bin/dfhctl stop            # 停止
-/var/jb/usr/bin/dfhctl replay          # 重播
-/var/jb/usr/bin/dfhctl panel           # 弹出控制台
-/var/jb/usr/bin/dfhctl list            # 列出乐谱
+# roothide 下 dfhctl 安装在 jbroot 内，路径由包管理器决定
+dfhctl play song.mid   # 播放
+dfhctl stop            # 停止
+dfhctl replay          # 重播
+dfhctl panel           # 弹出控制台
+dfhctl list            # 列出乐谱
 ```
 
 也可绑定 Activator 手势 → 运行命令，实现游戏内快捷键。
@@ -180,12 +199,12 @@ MIDI 建议单旋律轨、C 大调、音域 C4–C7。
 
 | 手势建议 | 命令 |
 | --- | --- |
-| 摇一摇 | `/var/jb/usr/bin/dfhctl replay` |
-| 双击状态栏 | `/var/jb/usr/bin/dfhctl panel` |
-| 三指轻点 | `/var/jb/usr/bin/dfhctl stop` |
+| 摇一摇 | `dfhctl replay` |
+| 双击状态栏 | `dfhctl panel` |
+| 三指轻点 | `dfhctl stop` |
 
-> Activator 的「运行命令」需以 root（或 jb 用户）身份执行 dfhctl，
-> 命令路径 rootless 下为 `/var/jb/usr/bin/dfhctl`。
+> Activator 的「运行命令」中，dfhctl 安装在 jbroot 内（roothide 下路径随机），
+> 建议直接填 `dfhctl ...` 让其通过 PATH 解析，或用 `which dfhctl` 查实际绝对路径。
 > 也可在 Activator 里直接给 dfhctl 配 `play <文件名>` 固定手势。
 
 配合**白名单校验**：即使误触手势，前台非三角洲时也不会注入任何触摸，安全无副作用。

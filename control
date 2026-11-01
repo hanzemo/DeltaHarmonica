@@ -2,9 +2,8 @@ Package: com.hanzemo.deltaharmonica
 Name: DeltaHarmonica
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: 三角洲行动·守夜人口琴 自动演奏插件（MIDI 播放，仅注入 SpringBoard 防封号）
+Description: 三角洲行动·守夜人口琴 自动演奏插件（MIDI 播放，仅注入 SpringBoard 防封号，roothide）
 Maintainer: hanzemo
 Author: hanzemo
 Section: Tweaks
 Depends: mobilesubstrate, firmware (>= 15.0), preferenceloader
-Conflicts: com.example.deltaharmonica

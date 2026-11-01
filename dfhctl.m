@@ -1,11 +1,12 @@
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
+#include <roothide.h>
 
 /* =====================================================================
- * dfhctl.m — 命令行触发工具
+ * dfhctl.m — 命令行触发工具（roothide）
  *
- * 编译后为 /usr/bin/dfhctl（rootless 下 /var/jb/usr/bin/dfhctl）。
- * 通过 Darwin 通知向 SpringBoard 内的 DeltaHarmonica 发送控制指令。
+ * 编译后随包安装，通过 Darwin 通知向 SpringBoard 内的 DeltaHarmonica
+ * 发送控制指令。
  *
  * 用法：
  *   dfhctl play song.mid      # 播放指定 MIDI
@@ -16,8 +17,7 @@
  * ===================================================================== */
 
 static NSString *DFHMidiDirectory(void) {
-    NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-    return [doc stringByAppendingPathComponent:@"DeltaHarmonica"];
+    return jbroot(@"/var/mobile/Documents/DeltaHarmonica");
 }
 
 static void postNotification(CFStringRef name, NSDictionary *userInfo) {

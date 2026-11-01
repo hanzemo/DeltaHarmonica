@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
+#include <roothide.h>
 #import "DFHCore.h"
 #import "DFHForeground.h"
 #import "DFHMIDIParser.h"
@@ -34,9 +35,9 @@ static NSString *DFHMidiDirectory(void) {
     static NSString *dir = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        /* roothide 路径 /var/jb 下；普通 Documents 也兼容 */
-        NSString *doc = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-        dir = [doc stringByAppendingPathComponent:@"DeltaHarmonica"];
+        /* roothide：用 jbroot() 定位越狱根下的目录（jbroot 随机化，不能硬编码 /var/jb） */
+        NSString *base = jbroot(@"/var/mobile/Documents/DeltaHarmonica");
+        dir = base;
         [[NSFileManager defaultManager] createDirectoryAtPath:dir
                                   withIntermediateDirectories:YES
                                                    attributes:nil error:nil];
