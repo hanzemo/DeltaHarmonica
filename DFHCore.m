@@ -89,10 +89,12 @@ static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uin
     IOHIDEventRef ev = IOHIDEventCreateDigitizerEvent(
         kCFAllocatorDefault, ts,
         0x00,                          /* transducerType */
+        0,                             /* index */          // ← 补上
         finger,                        /* identity */
         1,                             /* inRange（绝对坐标） */
-        phase,                         /* range / touch */
+        phase,                         /* quality / range / touch */
         x, y, 0, 0,                    /* x,y,z,pressure */
+        0,                             /* twist */          // ← 补上
         1,                             /* isTouch */
         0);                            /* options */
 
