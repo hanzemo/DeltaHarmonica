@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import "DFHCore.h"
+#import "DFHForeground.h"
 #import "DFHMIDIParser.h"
 #import "DFHPlayer.h"
 
@@ -50,6 +51,13 @@ static void DFHPlayMidiFile(NSString *fileName) {
         NSLog(@"[DFH] 未找到 MIDI：%@", path);
         return;
     }
+
+    /* 起播前白名单校验：前台必须是三角洲，否则拒绝播放 */
+    if (!DFHIsDeltaForceForeground()) {
+        NSLog(@"[DFH] 拒绝播放：前台 App 非三角洲（%@）", DFHCurrentFrontmostBundleID() ?: @"未知");
+        return;
+    }
+
     NSError *err = nil;
     DFHMIDIResult *res = [DFHMIDIParser parseFileAtPath:path error:&err];
     if (!res) { NSLog(@"[DFH] 解析失败：%@", err.localizedDescription); return; }
@@ -126,8 +134,8 @@ static UIWindow *gDFHWindow = nil;
     topY += self.table.frame.size.height;
 
     /* 底部按钮行 */
-    NSArray *buttons = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定"];
-    CGFloat bw = (w - 12*2 - 8*4) / 5.0;
+    NSArray *buttons = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
+    CGFloat bw = (w - 12*2 - 8*(buttons.count-1)) / (CGFloat)buttons.count;
     CGFloat bx = 12;
     for (NSUInteger i = 0; i < buttons.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -165,6 +173,13 @@ static UIWindow *gDFHWindow = nil;
         case 2: DFHReplayLast(); break;
         case 3: [self importMidi]; break;
         case 4: [self startCalibration]; break;
+        case 5: { /* 白名单开关 */
+            BOOL cur = DFHIsWhitelistEnabled();
+            [[NSUserDefaults standardUserDefaults] setBool:!cur forKey:@"whiteListEnabled"];
+            [[NSUserDefaults standardUserDefaults] synchronize];
+            [self refreshList];
+            break;
+        }
     }
 }
 
@@ -191,7 +206,15 @@ static UIWindow *gDFHWindow = nil;
     }
     self.midiFiles = [mids sortedArrayUsingSelector:@selector(compare:)];
     [self.table reloadData];
-    self.statusLabel.text = [NSString stringWithFormat:@"%lu 个乐谱", (unsigned long)self.midiFiles.count];
+
+    /* 状态：白名单 + 前台 App */
+    NSString *fbid = DFHCurrentFrontmostBundleID();
+    BOOL dfOn = DFHIsDeltaForceForeground();
+    self.statusLabel.text = [NSString stringWithFormat:@"%lu 首 · 前台 %@ %@",
+                             (unsigned long)self.midiFiles.count,
+                             fbid ?: @"未知",
+                             dfOn ? @"✓可演奏" : @"✗非三角洲"];
+    self.statusLabel.textColor = dfOn ? [UIColor systemGreenColor] : [UIColor systemRedColor];
 }
 
 - (void)viewWillAppear:(BOOL)animated {

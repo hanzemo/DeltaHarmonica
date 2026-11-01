@@ -25,7 +25,11 @@ typedef NS_ENUM(NSInteger, DFHRegister) {
     DFHRegisterSharp = 2,    /* 高音区 */
 };
 
-/* ---------- 标定键编号（13 键，存偏好 coord.0 ~ coord.12） ---------- */
+/* ---------- 标定键编号（共 12 键，存偏好 coord.0 ~ coord.11） ----------
+ * 8 个音符键 + 4 个切换键：
+ *   音符键：do re mi fa sol la si 高音do(i)
+ *   切换键：低音区 / 中音区(普通) / 高音区 / 半音
+ */
 #define DFH_KEY_DO      0
 #define DFH_KEY_RE      1
 #define DFH_KEY_MI      2
@@ -33,14 +37,13 @@ typedef NS_ENUM(NSInteger, DFHRegister) {
 #define DFH_KEY_SOL     4
 #define DFH_KEY_LA      5
 #define DFH_KEY_SI      6
-#define DFH_KEY_DO_HIGH 7   /* 高音 do（i） */
+#define DFH_KEY_DO_HIGH 7   /* 高音 do（i，独立物理键） */
 #define DFH_KEY_FLAT    8   /* 低音区切换 */
-#define DFH_KEY_NATURAL 9   /* 中音区切换 */
+#define DFH_KEY_NATURAL 9   /* 中音区（普通）切换 */
 #define DFH_KEY_SHARP   10  /* 高音区切换 */
-#define DFH_KEY_HALF    11  /* 半音键 */
-#define DFH_KEY_EXTRA   12  /* 保留 */
+#define DFH_KEY_HALF    11  /* 半音切换 */
 
-#define DFH_TOTAL_KEYS 13
+#define DFH_TOTAL_KEYS 12
 
 /* ---------- MIDI 常量 ---------- */
 #define DFH_MIDI_MIN 60   /* C4 */

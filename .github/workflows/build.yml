@@ -1,0 +1,101 @@
+# =====================================================================
+# GitHub Actions CI — 编译 DeltaHarmonica 越狱插件
+#
+# 方案：
+#   - macOS runner（自带 Xcode + iOS 交叉工具链，theos 官方要求）
+#   - theos/sdks 社区 SDK（iPhoneOS16.5.sdk，含私有框架 tbd）
+#   - 支持 GitHub 加速镜像（默认启用 gh-proxy.com，可用 USE_MIRROR 切换）
+# =====================================================================
+
+name: Build Tweak
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      USE_MIRROR:
+        description: '使用 GitHub 加速镜像（true/false）'
+        required: false
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    env:
+      # GitHub 加速镜像前缀（可为空表示直连）
+      MIRROR_PREFIX: "https://gh-proxy.com/"
+      THEOS: "${{ github.workspace }}/theos"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 决定是否使用加速镜像
+        id: mirror
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "USE_MIRROR=${{ github.event.inputs.USE_MIRROR }}" >> "$GITHUB_ENV"
+          else
+            echo "USE_MIRROR=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: 安装 Theos（加速镜像）
+        if: env.USE_MIRROR == 'true'
+        run: |
+          set -eux
+          THEOS_URL="${MIRROR_PREFIX}https://github.com/theos/theos/archive/refs/heads/master.tar.gz"
+          echo "拉取 theos：$THEOS_URL"
+          curl -fL --retry 3 -o /tmp/theos.tar.gz "$THEOS_URL"
+          mkdir -p "$THEOS"
+          tar -xzf /tmp/theos.tar.gz -C /tmp
+          # theos-<sha> 解压后目录名不确定，用通配移动内容
+          mv /tmp/theos-*/* "$THEOS/" 2>/dev/null || mv /tmp/theos-master/* "$THEOS/" 2>/dev/null || true
+          ls -la "$THEOS" | head
+
+      - name: 安装 Theos（直连）
+        if: env.USE_MIRROR != 'true'
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/theos/theos.git "$THEOS"
+
+      - name: 安装 iOS SDK（iPhoneOS16.5.sdk，加速镜像）
+        run: |
+          set -eux
+          SDKS_REPO_URL="https://github.com/theos/sdks.git"
+          if [ "$USE_MIRROR" = "true" ]; then
+            SDKS_REPO_URL="${MIRROR_PREFIX}${SDKS_REPO_URL}"
+          fi
+          echo "拉取 theos/sdks：$SDKS_REPO_URL"
+          rm -rf /tmp/theos-sdks
+          git clone --depth 1 "$SDKS_REPO_URL" /tmp/theos-sdks
+          # 复制 SDK 到 theos 的 sdks 目录
+          mkdir -p "$THEOS/sdks"
+          cp -R /tmp/theos-sdks/iPhoneOS16.5.sdk "$THEOS/sdks/"
+          ls -la "$THEOS/sdks/"
+
+      - name: 验证工具链
+        run: |
+          set -eux
+          xcodebuild -version
+          clang --version
+          echo "THEOS=$THEOS"
+          ls "$THEOS/sdks/"
+
+      - name: 编译 .deb
+        run: |
+          set -eux
+          cd "$GITHUB_WORKSPACE"
+          make clean || true
+          make package
+          echo "=== 产物 ==="
+          ls -la packages/
+
+      - name: 上传 .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: DeltaHarmonica-deb
+          path: packages/*.deb
+          if-no-files-found: error

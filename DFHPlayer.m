@@ -21,10 +21,10 @@ static const NSInteger kDFHRegKey[] = {
 /* 半音键编号 */
 static const NSInteger kDFHHalfKey = 11;
 
-/* 音符键编号：度数 1-8 -> 标定编号 0-7（8=高音 do 与 i 共用） */
+/* 音符键编号：度数 1-7 -> 标定编号 0-6，度数 8（高音 do）-> 标定编号 7 */
 static NSInteger DFHNoteKeyForDegree(int degree) {
     if (degree >= 1 && degree <= 7) return degree - 1;
-    if (degree == 8) return 7;            /* 高音 do 用 7 号键（i） */
+    if (degree == 8) return 7;            /* 高音 do（独立物理键，编号 7） */
     return 0;
 }
 
@@ -116,6 +116,7 @@ static NSInteger DFHNoteKeyForDegree(int degree) {
 
     uint64_t startNanos = mach_absolute_time();
     DFHRegister lastReg = DFHRegisterNatural;
+    BOOL lastHalf = NO;   /* 半音模式状态（切换式）：初始为自然音 */
 
     uint64_t lastNoteEndUs = 0;
 
@@ -130,13 +131,26 @@ static NSInteger DFHNoteKeyForDegree(int degree) {
         /* 音高 -> 音区/音名/半音 */
         DFHPitchMap m = [DFHMIDIParser pitchMapFor:n.pitch];
 
-        /* 若音区改变，先按调性切换键，等待切换间隙 */
-        if (m.reg != lastReg) {
+        /* 是否用「高音 do 独立键」（degree==8）：
+         * 此时不需切音区，直接按编号 7 键，也不改变 lastReg 状态 */
+        BOOL useIndependentHighDo = (m.degree == 8);
+
+        /* 若音区改变且非独立高音do，先按调性切换键，等待切换间隙 */
+        if (!useIndependentHighDo && m.reg != lastReg) {
             if (_cancel) break;
             DFHTapKey(kDFHRegKey[m.reg], 50.0);   /* 切换键短按 50ms */
             [self sleepUntilSinceStart:n.startUs + 120000 startTime:startNanos]; /* 120ms 切换间隙 */
             if (_cancel) break;
             lastReg = m.reg;
+        }
+
+        /* 半音是切换式（与音区一致）：半音模式改变时才按一次半音键 */
+        if (!useIndependentHighDo && m.accidental != lastHalf) {
+            if (_cancel) break;
+            DFHTapKey(kDFHHalfKey, 50.0);   /* 按一下半音键切换进/出半音模式 */
+            [self sleepUntilSinceStart:n.startUs + 80000 startTime:startNanos]; /* 80ms 切换间隙 */
+            if (_cancel) break;
+            lastHalf = m.accidental;
         }
 
         /* 计算按押时长：音符时长 - 30ms 留隙，夹在 30~60ms */
@@ -145,14 +159,7 @@ static NSInteger DFHNoteKeyForDegree(int degree) {
         if (holdMs < DFH_MIN_HOLD_MS) holdMs = DFH_MIN_HOLD_MS;
         if (holdMs > DFH_MAX_HOLD_MS) holdMs = DFH_MAX_HOLD_MS;
 
-        /* 半音：先按半音键再按音符（三角洲半音是升半音语义） */
-        if (m.accidental) {
-            DFHTapKey(kDFHHalfKey, 50.0);
-            [self sleepUntilSinceStart:n.startUs + 60000 startTime:startNanos]; /* 60ms 间隙 */
-            if (_cancel) break;
-        }
-
-        /* 按下音符键 */
+        /* 按下音符键（do re mi fa sol la si 固定键；高音 do 用编号 7 独立键） */
         DFHTapKey(DFHNoteKeyForDegree(m.degree), holdMs);
 
         uint64_t noteEndUs = n.startUs + n.durationUs;

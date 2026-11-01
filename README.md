@@ -30,9 +30,18 @@ PC 端 [delta-harmonica](https://gitcode.com/wolaizhaowo/delta-harmonica)（Pyth
 | 国服 | 深圳腾讯天游 | `com.tencent.tmgp.dfm` | [id1642894547](https://apps.apple.com/cn/app/id1642894547) |
 | 国际服 | Garena | `com.garena.game.df` | [id6670604287](https://apps.apple.com/tw/app/id6670604287) |
 
-> 由于采用「全局投递前台 App」方案，插件本身不依赖 bundle id 过滤游戏；
-> 但可在后续版本加入「仅当前台 App 是三角洲时才允许派发」的白名单校验，
-> 进一步提升安全性（已预留常量，见 `Tweak.xm`）。
+### 白名单校验（已实现，防封号核心）
+
+插件内置**前台 App 白名单护栏**（`DFHForeground.m`）：
+
+- 每次派发触摸前，通过 SpringBoard 私有 API（`SBApplicationController` /
+  `UIApplication frontmostApplication`）读取**当前前台 App 的 bundle id**
+- **仅当前台是《三角洲行动》（国服/国际服）时才放行**触摸注入
+- 否则直接拦截，日志输出 `[DFH] 前台非三角洲...已拦截`，杜绝误触/误注入其他 App
+- 默认开启，可在悬浮窗「🛡 白名单」按钮或偏好 `whiteListEnabled` 关闭
+
+> 这意味着：即使误触发播放、误按手势，只要当前不在游戏里，就不会向任何 App 注入触摸，
+> 从根本上降低被检测/误操作的风险。
 
 ---
 
@@ -134,15 +143,52 @@ Sileo 勾选 DeltaHarmonica，注入目标是 SpringBoard；安装后 respring�
 
 ## 五、音域与键位映射
 
-三角洲口琴 C 调，音域 **C4(60)~C7(96) 共 38 键（含半音）**：
+三角洲口琴 C 调，**12 键 = 8 个音符键 + 4 个切换键**：
+
+| 类型 | 键 | 说明 |
+| --- | --- | --- |
+| 音符键（8） | `do re mi fa sol la si` + 高音`do` | 固定物理键 |
+| 切换键（4） | 低音区 / 中音区(普通) / 高音区 / 半音 | **切换式**，按一下切模式 |
+
+演奏逻辑（与实机一致）：
+
+- **音符键固定**：`do re mi fa sol la si` 永远是这 7 个键，音高由切换键决定
+- **音区切换**：低音区(C4–B4) / 中音区(C5–B5) / 高音区(C6–C7)，跨音区才切一次
+- **半音切换**：也是切换式，进/出半音模式才按一次（升半音语义）
+- **高音 do 独立键**：吹 C6 直接按高音 do 键（编号 7），不需先切高音区
+- 超界削波
+
+### 音高映射表（C4=60 ~ C7=96，38 键）
 
 | 音区 | 音高 | MIDI | 切换键 |
 | --- | --- | --- | --- |
 | 低音区 | C4–B4 | 60–71 | 低音区 |
-| 中音区 | C5–B5 | 72–83 | 中音区 |
-| 高音区 | C6–C7 | 84–96 | 高音区 |
+| 中音区 | C5–B5 | 72–83 | 中音区(普通) |
+| 高音区 | C6–C7 | 84–96 | 高音区（C6 用高音do独立键） |
 
-自然音→音符键，半音→最近自然音+半音键，超界削波。MIDI 建议单旋律轨、C 大调、音域 C4–C7。
+MIDI 建议单旋律轨、C 大调、音域 C4–C7。
+
+---
+
+## 五·五、Activator 手势绑定
+
+安装 [Activator](http://rpetri.ch/cydia/activator/) 后，可把演奏控制绑定到手势（如摇一摇、双击状态栏等），
+实现游戏内无悬浮窗操作：
+
+1. 打开 Activator → 「任意位置」→ 选一个手势（如「双击状态栏」）
+2. 搜索并绑定以下「运行命令」：
+
+| 手势建议 | 命令 |
+| --- | --- |
+| 摇一摇 | `/var/jb/usr/bin/dfhctl replay` |
+| 双击状态栏 | `/var/jb/usr/bin/dfhctl panel` |
+| 三指轻点 | `/var/jb/usr/bin/dfhctl stop` |
+
+> Activator 的「运行命令」需以 root（或 jb 用户）身份执行 dfhctl，
+> 命令路径 rootless 下为 `/var/jb/usr/bin/dfhctl`。
+> 也可在 Activator 里直接给 dfhctl 配 `play <文件名>` 固定手势。
+
+配合**白名单校验**：即使误触手势，前台非三角洲时也不会注入任何触摸，安全无副作用。
 
 ---
 

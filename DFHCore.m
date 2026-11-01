@@ -1,4 +1,5 @@
 #import "DFHCore.h"
+#import "DFHForeground.h"
 #import <UIKit/UIKit.h>
 #import <mach/mach_time.h>
 
@@ -99,7 +100,19 @@ static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uin
     }
 }
 
+/* 白名单护栏：仅当前台 App 是三角洲时才允许派发触摸 */
+static BOOL DFHShouldInject(void) {
+    BOOL ok = DFHIsDeltaForceForeground();
+    if (!ok) {
+        /* 前台非三角洲，拒绝注入，防误触/防封号 */
+        NSLog(@"[DFH] 前台非三角洲（%@），已拦截触摸注入", DFHCurrentFrontmostBundleID() ?: @"未知");
+    }
+    return ok;
+}
+
 void DFHTapAtPoint(CGPoint point, double holdMs) {
+    if (!DFHShouldInject()) return;
+
     CGFloat scale = [UIScreen mainScreen].scale;
     uint32_t x = (uint32_t)lround(point.x * scale);
     uint32_t y = (uint32_t)lround(point.y * scale);

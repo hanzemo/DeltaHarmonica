@@ -23,7 +23,7 @@ include $(THEOS)/makefiles/common.mk
 # ---------------- Tweak：DeltaHarmonica ----------------
 TWEAK_NAME := DeltaHarmonica
 
-DeltaHarmonica_FILES := Tweak.xm DFHCore.m DFHMIDIParser.m DFHPlayer.m
+DeltaHarmonica_FILES := Tweak.xm DFHCore.m DFHForeground.m DFHMIDIParser.m DFHPlayer.m
 DeltaHarmonica_CFLAGS := -fobjc-arc -I.
 DeltaHarmonica_LDFLAGS := -framework UIKit -framework Foundation -framework CoreGraphics
 DeltaHarmonica_LDFLAGS += -weak_framework IOKit

@@ -32,49 +32,45 @@
 static DFHPitchMap DFHMapPitch(uint8_t pitch) {
     DFHPitchMap m = { DFHRegisterNatural, 1, NO };
 
-    static const int natural[] = { 0, 2, 4, 5, 7, 9, 11 }; /* C D E F G A B 相对 C 的半音偏移 */
-    /* 音名表：0=C 1=D 2=E 3=F 4=G 5=A 6=B */
-    static const char * const semis[] = { "C","D","E","F","G","A","B" };
+    /* C 大调自然音在白键上的半音偏移：C D E F G A B */
+    static const int natural[] = { 0, 2, 4, 5, 7, 9, 11 };
 
     if (pitch < DFH_MIDI_MIN || pitch > DFH_MIDI_MAX) {
-        /* 超界：削波到最接近的边界半音 */
         uint8_t clamped = pitch < DFH_MIDI_MIN ? DFH_MIDI_MIN : DFH_MIDI_MAX;
         return DFHMapPitch(clamped);
     }
 
     int rel = pitch - DFH_MIDI_MIN;          /* 0..36 相对 C4 */
-    int octave = rel / 12;                   /* 0..3 */
     int semitone = rel % 12;                 /* 0..11 相对 C */
 
-    /* 找最近的自然音（白键）与是否半音 */
-    int best = 0, bestDist = 12;
-    for (int i = 0; i < 7; i++) {
-        int d = natural[i];
-        int dist = abs(semitone - d);
-        if (dist < bestDist) { bestDist = dist; best = i; }
+    /* 特殊：C6（高音 do），用独立物理键（编号 7，degree=8），
+     * 不需要切高音区。C7(96) 超出常规，也走独立键兜底。 */
+    if (pitch == 84) {
+        m.reg = DFHRegisterSharp;
+        m.degree = 8;          /* 高音 do 独立键 */
+        m.accidental = NO;
+        return m;
     }
 
-    BOOL isAccidental = (semitone != natural[best]);
-    int degree = best + 1; /* 1..7 */
+    /* 统一"升半音"语义：黑键映射为"前一个自然音 + 半音键"。
+     * 例：C#(1)→do+半音，D#(3)→re+半音，F#(6)→fa+半音，
+     *     G#(8)→sol+半音，A#(10)→la+半音。 */
+    int degree = 1;        /* 1..7 */
+    BOOL accidental = NO;
 
-    /* 音区：C4(octave2 -> 中音 NATURAL)，C5 -> 高音 SHARP，具体：
-     * 三角洲键位：低音区覆盖 C4~?，中音区 C5，高音区 C6
-     * 依据 DF-NoctReed：低音区=C4，中音区(C5)=自然，高音区(C6)。
-     * 这里按 pitch 所在八度映射音区。 */
-    int absPitch = pitch; /* C4=60 -> 中音区基准是 C5? 按下表： */
-    /* C4(60)-B4(71) -> 低音区(FLAT) */
-    /* C5(72)-B5(83) -> 中音区(NATURAL) */
-    /* C6(84)-B6(95) -> 高音区(SHARP) */
-    /* B6 之上 C7(96) -> 高音区 SHARP */
+    for (int i = 0; i < 7; i++) {
+        if (semitone == natural[i]) { degree = i + 1; accidental = NO; break; }
+        /* 黑键：位于 natural[i] 与 natural[i+1] 之间（差 2 半音的那个空档） */
+        if (i < 6 && semitone == natural[i] + 1) { degree = i + 1; accidental = YES; break; }
+    }
+
+    /* 音区：按 pitch 所在八度映射（与 DF-NoctReed 一致） */
     if (pitch >= 60 && pitch <= 71)       m.reg = DFHRegisterFlat;
     else if (pitch >= 72 && pitch <= 83)  m.reg = DFHRegisterNatural;
-    else if (pitch >= 84)                 m.reg = DFHRegisterSharp;
+    else                                  m.reg = DFHRegisterSharp;
 
-    /* 半音若落在自然音名上，用升/降语义；三角洲半音键默认升高半音。
-     * 这里 degree 已是最接近自然音，accidental 标记需要用半音键。 */
     m.degree = degree;
-    m.accidental = isAccidental;
-    (void)semis;
+    m.accidental = accidental;
     return m;
 }
 
