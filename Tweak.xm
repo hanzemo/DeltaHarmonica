@@ -38,7 +38,12 @@ static CFStringRef const kDFHNotifyReplay = CFSTR("com.hanzemo.deltaharmonica.re
 static CFStringRef const kDFHNotifyToggle = CFSTR("com.hanzemo.deltaharmonica.toggle");
 
 /* ---------------- Debug 宏 ---------------- */
-#define DFHLOG(fmt, ...) NSLog(@"[DFH] " fmt, ##__VA_ARGS__)
+#define DFHLOG(fmt, ...) do { \
+    NSString *s = [NSString stringWithFormat:@"[DFH] " fmt "\n", ##__VA_ARGS__]; \
+    NSString *p = @"/var/mobile/Documents/dfh.log"; \
+    FILE *f = fopen(p.UTF8String, "a"); \
+    if (f) { fputs(s.UTF8String, f); fclose(f); } \
+} while(0)
 
 /* ---------------- 乐谱目录 ---------------- */
 static NSString *DFHMidiDirectory(void) {
