@@ -32,13 +32,15 @@ BOOL DFHIsWhitelistEnabled(void) {
 static NSString *DFH_BundleIDOf(id app) {
     if (!app) return nil;
     /* 尝试 bundleIdentifier 属性 */
-    if ([app respondsToSelector:@selector(bundleIdentifier)]) {
-        NSString *bid = [app bundleIdentifier];
+    SEL selBID = NSSelectorFromString(@"bundleIdentifier");
+    if ([app respondsToSelector:selBID]) {
+        NSString *bid = ((id (*)(id, SEL))objc_msgSend)(app, selBID);
         if (bid.length) return bid;
     }
-    /* 尝试 bundleID 属性（旧 API） */
-    if ([app respondsToSelector:@selector(bundleID)]) {
-        NSString *bid = [app bundleID];
+    /* 尝试 bundleID 属性（旧 API，无公开声明，必须走 msgSend） */
+    SEL selBIDOld = NSSelectorFromString(@"bundleID");
+    if ([app respondsToSelector:selBIDOld]) {
+        NSString *bid = ((id (*)(id, SEL))objc_msgSend)(app, selBIDOld);
         if (bid.length) return bid;
     }
     return nil;
