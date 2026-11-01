@@ -1,0 +1,11 @@
+# Theos 构建产物
+.DS_Store
+.obj/
+obj/
+*.deb
+packages/
+.theos/
+build/
+
+# Xcode
+*.xcuserdatad
