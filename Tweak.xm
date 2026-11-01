@@ -305,13 +305,6 @@ static void DFHShowPanel(void) {
     });
 }
 
-static void DFHHidePanel(void) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (gDFHWindow) gDFHWindow.hidden = YES;
-        DFHLOG(@"HidePanel");
-    });
-}
-
 static BOOL DFHPanelVisible(void) {
     return gDFHWindow && !gDFHWindow.hidden;
 }
