@@ -49,7 +49,32 @@ static NSString *DFH_BundleIDOf(id app) {
 }
 
 NSString *DFHCurrentFrontmostBundleID(void) {
-    /* 方法 1：UIApplication frontmostApplication */
+    /* ---------- 方法 0（新增，iOS 16 优先）：SpringBoard _accessibilityFrontMostApplication ---------- */
+    Class sbClass = objc_getClass("SpringBoard");
+    if (sbClass) {
+        SEL sharedSel = NSSelectorFromString(@"sharedApplication");
+        if ([sbClass respondsToSelector:sharedSel]) {
+            id sbApp = ((id (*)(id, SEL))objc_msgSend)(sbClass, sharedSel);
+            SEL axSel = NSSelectorFromString(@"_accessibilityFrontMostApplication");
+            if (sbApp && [sbApp respondsToSelector:axSel]) {
+                id frontApp = ((id (*)(id, SEL))objc_msgSend)(sbApp, axSel);
+                if (frontApp) {
+                    SEL bidSel = NSSelectorFromString(@"bundleIdentifier");
+                    if ([frontApp respondsToSelector:bidSel]) {
+                        NSString *bid = ((id (*)(id, SEL))objc_msgSend)(frontApp, bidSel);
+                        if (bid.length) return bid;
+                    }
+                    SEL dispSel = NSSelectorFromString(@"displayIdentifier");
+                    if ([frontApp respondsToSelector:dispSel]) {
+                        NSString *bid = ((id (*)(id, SEL))objc_msgSend)(frontApp, dispSel);
+                        if (bid.length) return bid;
+                    }
+                }
+            }
+        }
+    }
+
+    /* ---------- 方法 1：UIApplication frontmostApplication ---------- */
     UIApplication *app = [UIApplication sharedApplication];
     SEL sel = NSSelectorFromString(@"frontmostApplication");
     if ([app respondsToSelector:sel]) {
@@ -58,7 +83,7 @@ NSString *DFHCurrentFrontmostBundleID(void) {
         if (bid.length) return bid;
     }
 
-    /* 方法 2：SBApplicationController */
+    /* ---------- 方法 2：SBApplicationController ---------- */
     Class cls = NSClassFromString(@"SBApplicationController");
     if (cls) {
         id ctrl = ((id (*)(id, SEL))objc_msgSend)(cls, NSSelectorFromString(@"sharedInstance"));
@@ -76,6 +101,21 @@ NSString *DFHCurrentFrontmostBundleID(void) {
             }
         }
     }
+
+    /* ---------- 方法 3（新增）：FBSSystemService ---------- */
+    Class fbs = NSClassFromString(@"FBSSystemService");
+    if (fbs) {
+        SEL sharedSel = NSSelectorFromString(@"sharedService");
+        if ([fbs respondsToSelector:sharedSel]) {
+            id svc = ((id (*)(id, SEL))objc_msgSend)(fbs, sharedSel);
+            SEL sel3 = NSSelectorFromString(@"frontmostApplicationBundleID");
+            if (svc && [svc respondsToSelector:sel3]) {
+                NSString *bid = ((id (*)(id, SEL))objc_msgSend)(svc, sel3);
+                if (bid.length) return bid;
+            }
+        }
+    }
+
     return nil;
 }
 
