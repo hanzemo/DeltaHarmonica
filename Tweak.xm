@@ -267,7 +267,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 
 /* ---------------- 主面板 ---------------- */
 
-@interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource>
+@interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
 @property (nonatomic, strong) UISlider *progressSlider;
 @property (nonatomic, strong) UIButton *rateButton;
 @property (nonatomic, assign) BOOL userDraggingSlider;
@@ -396,6 +396,64 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     }
 }
 
+- (void)importMidi {
+    if (gDFHWindow && gDFHWindow.hidden) gDFHWindow.hidden = NO;
+
+    UIDocumentPickerViewController *picker = nil;
+    if (@available(iOS 14.0, *)) {
+        picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeMIDI]
+                                                                             asCopy:YES];
+    } else {
+        picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.midi-audio"]
+                                                                        inMode:UIDocumentPickerModeImport];
+    }
+    picker.delegate = self;
+    picker.allowsMultipleSelection = NO;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)documentPicker:(UIDocumentPickerViewController *)controller
+didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
+    (void)controller;
+    if (urls.count == 0) return;
+
+    NSURL *src = urls.firstObject;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *destDir = DFHMidiDirectory();
+    NSString *name = src.lastPathComponent;
+    NSString *dest = [destDir stringByAppendingPathComponent:name];
+
+    /* 重名加 -1 后缀 */
+    if ([fm fileExistsAtPath:dest]) {
+        NSString *base = [name stringByDeletingPathExtension];
+        NSString *ext = name.pathExtension;
+        for (NSInteger i = 1; i < 1000; i++) {
+            NSString *candidate = [NSString stringWithFormat:@"%@-%ld.%@", base, (long)i, ext];
+            NSString *p = [destDir stringByAppendingPathComponent:candidate];
+            if (![fm fileExistsAtPath:p]) { dest = p; name = candidate; break; }
+        }
+    }
+
+    BOOL srcAccess = [src startAccessingSecurityScopedResource];
+    NSError *err = nil;
+    BOOL ok = [fm copyItemAtURL:src toURL:[NSURL fileURLWithPath:dest] error:&err];
+    if (srcAccess) [src stopAccessingSecurityScopedResource];
+
+    if (ok) {
+        [self refreshList];
+        self.statusLabel.text = [NSString stringWithFormat:@"已导入 %@", name];
+        DFHLOG(@"导入成功 %@ → %@", src.path, dest);
+    } else {
+        self.statusLabel.text = @"导入失败";
+        DFHLOG(@"导入失败 %@：%@", src.path, err.localizedDescription);
+    }
+}
+
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller {
+    (void)controller;
+    self.statusLabel.text = @"已取消导入";
+}
+
 - (void)openCalibration {
     __weak typeof(self) weakSelf = self;
     DFHCalibrationViewController *cal = [[DFHCalibrationViewController alloc] initWithFinishBlock:^{
@@ -487,6 +545,98 @@ static void DFHShowPanel(void) {
     });
 }
 
+static void DFHHidePanel(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gDFHWindow) gDFHWindow.hidden = YES;
+        DFHLOG(@"HidePanel（播放继续）");
+    });
+}
+
+/* ---------------- 临时 Alert Window（功能 1 弹窗挂载） ---------------- */
+static UIWindow *gDFHAlertWindow = nil;
+
+static void DFHShowResumeAlertIfNeeded(void) {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *lastMidi = [ud objectForKey:@"lastMidi"];
+    uint64_t lastUs = [[ud objectForKey:@"lastPlayedUs"] unsignedLongLongValue];
+    if (lastMidi.length == 0 || lastUs == 0) return;
+
+    NSString *path = [DFHMidiDirectory() stringByAppendingPathComponent:lastMidi];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return;
+    NSError *err = nil;
+    DFHMIDIResult *res = [DFHMIDIParser parseFileAtPath:path error:&err];
+    if (!res) return;
+
+    double bpm = res.bpm > 0 ? res.bpm : DFH_DEFAULT_BPM;
+    double scale = bpm / 120.0;
+    uint64_t totalUs = (uint64_t)((double)res.totalDurationUs / scale);
+    if (lastUs > totalUs) lastUs = totalUs;
+
+    uint64_t sec = lastUs / 1000000ULL;
+    NSString *posText = [NSString stringWithFormat:@"%02llu:%02llu",
+                         (unsigned long long)(sec / 60), (unsigned long long)(sec % 60)];
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!gDFHAlertWindow) {
+            CGRect r = [UIScreen mainScreen].bounds;
+            gDFHAlertWindow = [[UIWindow alloc] initWithFrame:r];
+            if (@available(iOS 13.0, *)) {
+                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                    if (scene.activationState == UISceneActivationStateForegroundActive &&
+                        [scene isKindOfClass:[UIWindowScene class]]) {
+                        gDFHAlertWindow.windowScene = (UIWindowScene *)scene;
+                        break;
+                    }
+                }
+            }
+            UIViewController *root = [UIViewController new];
+            root.view.backgroundColor = [UIColor clearColor];
+            gDFHAlertWindow.rootViewController = root;
+        }
+        gDFHAlertWindow.windowLevel = UIWindowLevelAlert + 2000;
+        gDFHAlertWindow.hidden = NO;
+
+        UIViewController *root = gDFHAlertWindow.rootViewController;
+        if (!root || root.presentedViewController) return;
+
+        NSString *msg = [NSString stringWithFormat:@"上次播放《%@》到 %@，是否继续？", lastMidi, posText];
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"继续播放？"
+                                                                       message:msg
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        __weak UIWindow *weakAlertWin = gDFHAlertWindow;
+        [alert addAction:[UIAlertAction actionWithTitle:@"继续" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            (void)a;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                DFHPlayer *p = [DFHPlayer shared];
+                p.currentMidiName = lastMidi;
+                [p playResult:res fromUs:lastUs];
+                [ud setObject:@(lastUs) forKey:@"lastPlayedUs"];
+                [ud synchronize];
+            });
+            if (weakAlertWin) { weakAlertWin.hidden = YES; }
+            gDFHAlertWindow = nil;
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"从头" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+            (void)a;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                DFHPlayer *p = [DFHPlayer shared];
+                p.currentMidiName = lastMidi;
+                [p playResult:res fromUs:0];
+                [ud setObject:@(0) forKey:@"lastPlayedUs"];
+                [ud synchronize];
+            });
+            if (weakAlertWin) { weakAlertWin.hidden = YES; }
+            gDFHAlertWindow = nil;
+        }]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:^(UIAlertAction *a) {
+            (void)a;
+            if (weakAlertWin) { weakAlertWin.hidden = YES; }
+            gDFHAlertWindow = nil;
+        }]];
+        [root presentViewController:alert animated:YES completion:nil];
+    });
+}
+
 static BOOL DFHPanelVisible(void) {
     return gDFHWindow && !gDFHWindow.hidden;
 }
@@ -503,7 +653,7 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
     if (!df) return NO;               /* 非三角洲：放行音量 */
 
     if (visible) {
-        if (gDFHWindow) gDFHWindow.hidden = YES;   /* 只隐藏，不停播 */
+        DFHHidePanel();
         DFHLOG(@"[%s] 面板可见 → 隐藏（播放继续）", where);
     } else {
         DFHShowPanel();
@@ -575,6 +725,30 @@ static void DFHNotifyCallback(CFNotificationCenterRef center, void *observer,
     }
 }
 
+static void DFHAppDidEnterBackground(CFNotificationCenterRef center, void *observer,
+                                     CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
+    DFHPlayer *p = [DFHPlayer shared];
+    if (p.isPlaying) {
+        DFHLOG(@"三角洲退后台 → pauseAndSave");
+        [p pauseAndSave];
+    }
+}
+
+static void DFHAppDidBecomeActive(CFNotificationCenterRef center, void *observer,
+                                  CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
+    if (!DFHIsDeltaForceForeground()) return;
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gDFHWindow && !gDFHWindow.hidden &&
+            [gDFHWindow.rootViewController isKindOfClass:[DFHPanelViewController class]]) {
+            [(DFHPanelViewController *)gDFHWindow.rootViewController refreshList];
+        }
+        DFHShowResumeAlertIfNeeded();
+    });
+}
+
 /* ---------------- Debug：启动时打印类/方法是否存在 ---------------- */
 
 static void DFHDebugDumpVolumeClasses(void) {
@@ -621,6 +795,31 @@ static void DFHInit(void) {
     CFNotificationCenterAddObserver(nc, NULL, DFHNotifyCallback, kDFHNotifyToggle, NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
+/* 前后台通知（SpringBoard 里也能收到） */
+    NSNotificationCenter *localNC = [NSNotificationCenter defaultCenter];
+    [localNC addObserverForName:UIApplicationDidEnterBackgroundNotification
+                         object:nil
+                          queue:[NSOperationQueue mainQueue]
+                     usingBlock:^(NSNotification *note) {
+        (void)note;
+        DFHPlayer *p = [DFHPlayer shared];
+        if (p.isPlaying) {
+            DFHLOG(@"三角洲退后台 → pauseAndSave");
+            [p pauseAndSave];
+        }
+    }];
+    [localNC addObserverForName:UIApplicationDidBecomeActiveNotification
+                         object:nil
+                          queue:[NSOperationQueue mainQueue]
+                     usingBlock:^(NSNotification *note) {
+        (void)note;
+        if (!DFHIsDeltaForceForeground()) return;
+        if (gDFHWindow && !gDFHWindow.hidden &&
+            [gDFHWindow.rootViewController isKindOfClass:[DFHPanelViewController class]]) {
+            [(DFHPanelViewController *)gDFHWindow.rootViewController refreshList];
+        }
+        DFHShowResumeAlertIfNeeded();
+    }];
     %init(SpringBoardVolumeHook);
     %init(VolumeControlHook);
 
