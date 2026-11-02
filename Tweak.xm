@@ -675,7 +675,6 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
 }
 
 %end
-%end
 
 %group VolumeControlHook
 
