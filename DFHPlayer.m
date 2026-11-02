@@ -194,7 +194,7 @@ static NSString * const kDFHKeyLastPlayedUs = @"lastPlayedUs";
 /* ------------------------------------------------------------------
  * BPM 归一化：复制 notes 并缩放（不改 result 本身）
  * ------------------------------------------------------------------ */
-static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, double *outTotalUs) {
+static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_t *outTotalUs) {
     double bpm = result.bpm;
     if (bpm <= 0) bpm = DFH_DEFAULT_BPM;
     double tempoScale = bpm / 120.0;
@@ -216,7 +216,6 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, double 
            (unsigned long long)(outTotalUs ? *outTotalUs : 0));
     return out;
 }
-
 /* ------------------------------------------------------------------
  * 播放入口
  * ------------------------------------------------------------------ */
