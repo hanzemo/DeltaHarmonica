@@ -487,14 +487,9 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 - (void)importMidi {
     if (gDFHWindow && gDFHWindow.hidden) gDFHWindow.hidden = NO;
 
-    UIDocumentPickerViewController *picker = nil;
-    if (@available(iOS 14.0, *)) {
-        picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeMIDI]
-                                                                             asCopy:YES];
-    } else {
-        picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.midi-audio"]
-                                                                        inMode:UIDocumentPickerModeImport];
-    }
+    UIDocumentPickerViewController *picker =
+        [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeMIDI]
+                                                                     asCopy:YES];
     picker.delegate = self;
     picker.allowsMultipleSelection = NO;
     [self presentViewController:picker animated:YES completion:nil];
