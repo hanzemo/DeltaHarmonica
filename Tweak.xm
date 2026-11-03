@@ -927,8 +927,9 @@ static void DFHInit(void) {
         DFHShowResumeAlertIfNeeded();
     }];
 
-    /* 转竖屏自动隐藏面板 */
-    [localNC addObserverForName:UIApplicationWillChangeStatusBarOrientationNotification
+/* 转竖屏自动隐藏面板（用 UIDevice 方向通知，避免 deprecated 警告） */
+    [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
+    [localNC addObserverForName:UIDeviceOrientationDidChangeNotification
                          object:nil
                           queue:[NSOperationQueue mainQueue]
                      usingBlock:^(NSNotification *note) {
