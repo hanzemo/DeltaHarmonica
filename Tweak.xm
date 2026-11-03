@@ -154,39 +154,6 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     self.table.delegate = self;
     self.table.backgroundColor = [UIColor clearColor];
     [self.view addSubview:self.table];
-    [self.view addSubview:b];
-        bx += bw + 8;
-    }
-
-    /* ---- 进度条 ---- */
-    CGFloat sliderY = topY + 44 + 8;
-    self.progressSlider = [[UISlider alloc] initWithFrame:CGRectMake(12, sliderY, w - 24 - 70, 30)];
-    self.progressSlider.minimumValue = 0;
-    self.progressSlider.maximumValue = 1;
-    self.progressSlider.value = 0;
-    [self.progressSlider addTarget:self action:@selector(sliderTouchDown) forControlEvents:UIControlEventTouchDown];
-    [self.progressSlider addTarget:self action:@selector(sliderTouchUp) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
-    [self.view addSubview:self.progressSlider];
-
-    /* ---- 倍速按钮 ---- */
-    self.rateButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.rateButton.frame = CGRectMake(w - 12 - 60, sliderY, 60, 30);
-    [self.rateButton setTitle:@"1.0x" forState:UIControlStateNormal];
-    [self.rateButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    self.rateButton.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
-    self.rateButton.layer.cornerRadius = 8;
-    [self.rateButton addTarget:self action:@selector(cycleRate) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:self.rateButton];
-
-    /* ---- 绑定 player.onProgress ---- */
-    __weak typeof(self) weakSelf = self;
-    [DFHPlayer shared].onProgress = ^(uint64_t playedUs, uint64_t totalUs) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            __strong typeof(weakSelf) strongSelf = weakSelf;
-            if (!strongSelf || strongSelf.userDraggingSlider || totalUs == 0) return;
-            strongSelf.progressSlider.value = (float)((double)playedUs / (double)totalUs);
-        });
-    };
 }
 
 - (void)goBack {
@@ -280,6 +247,127 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 
 @implementation DFHPanelViewController
 
+- (void)viewDidLoad {
+    [super viewDidLoad];
+
+    self.sizeLevel = 1;
+    self.view.frame = self.view.bounds;
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
+    self.view.layer.cornerRadius = 16;
+    self.view.clipsToBounds = YES;
+
+    CGFloat w = self.view.bounds.size.width;
+    if (w <= 1) {
+        w = [UIScreen mainScreen].bounds.size.width * 0.9;
+        self.view.frame = CGRectMake(0, 0, w, [UIScreen mainScreen].bounds.size.height * 0.7);
+    }
+    CGFloat topY = 8;
+
+    /* 标题 + 尺寸 + 关闭 */
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-140, 32)];
+    title.text = @"三角洲口琴 · 控制台";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:16];
+    [self.view addSubview:title];
+
+    UIButton *resize = [UIButton buttonWithType:UIButtonTypeSystem];
+    resize.frame = CGRectMake(w-110, topY, 44, 32);
+    [resize setTitle:@"⤢" forState:UIControlStateNormal];
+    [resize setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [resize addTarget:self action:@selector(cycleSize) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:resize];
+
+    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
+    close.frame = CGRectMake(w-60, topY, 48, 32);
+    [close setTitle:@"收起" forState:UIControlStateNormal];
+    [close setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
+    [close addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:close];
+
+    /* 标题栏拖动 */
+    UIView *dragBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 48)];
+    dragBar.backgroundColor = [UIColor clearColor];
+    [self.view addSubview:dragBar];
+    [self.view sendSubviewToBack:dragBar];
+    UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
+    [dragBar addGestureRecognizer:pan];
+
+    topY += 40;
+
+    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
+    self.statusLabel.text = @"就绪";
+    self.statusLabel.textColor = [UIColor systemGreenColor];
+    self.statusLabel.font = [UIFont systemFontOfSize:13];
+    [self.view addSubview:self.statusLabel];
+    topY += 26;
+
+    UILabel *listHead = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
+    listHead.text = @"乐谱（.mid）";
+    listHead.textColor = [UIColor lightGrayColor];
+    listHead.font = [UIFont systemFontOfSize:12];
+    [self.view addSubview:listHead];
+    topY += 22;
+
+    /* 表格：从 topY 到 按钮行上方 */
+    CGFloat btnRowH = 44 + 16;
+    CGFloat tableH = self.view.bounds.size.height - topY - btnRowH - 8;
+    if (tableH < 60) tableH = 60;
+    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, topY, w, tableH) style:UITableViewStylePlain];
+    self.table.delegate = self;
+    self.table.dataSource = self;
+    self.table.backgroundColor = [UIColor clearColor];
+    self.table.separatorColor = [UIColor colorWithWhite:0.3 alpha:1];
+    [self.view addSubview:self.table];
+
+    topY += tableH + 8;
+
+    NSArray *buttons = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
+    CGFloat bw = (w - 12*2 - 8*(buttons.count-1)) / (CGFloat)buttons.count;
+    CGFloat bx = 12;
+    for (NSUInteger i = 0; i < buttons.count; i++) {
+        UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
+        b.frame = CGRectMake(bx, topY, bw, 44);
+        [b setTitle:buttons[i] forState:UIControlStateNormal];
+        [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        b.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
+        b.layer.cornerRadius = 8;
+        b.tag = i;
+        [b addTarget:self action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [self.view addSubview:b];
+        bx += bw + 8;
+    }
+
+    /* ---- 进度条 ---- */
+    CGFloat sliderY = topY + 44 + 8;
+    self.progressSlider = [[UISlider alloc] initWithFrame:CGRectMake(12, sliderY, w - 24 - 70, 30)];
+    self.progressSlider.minimumValue = 0;
+    self.progressSlider.maximumValue = 1;
+    self.progressSlider.value = 0;
+    [self.progressSlider addTarget:self action:@selector(sliderTouchDown) forControlEvents:UIControlEventTouchDown];
+    [self.progressSlider addTarget:self action:@selector(sliderTouchUp) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
+    [self.view addSubview:self.progressSlider];
+
+    /* ---- 倍速按钮 ---- */
+    self.rateButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    self.rateButton.frame = CGRectMake(w - 12 - 60, sliderY, 60, 30);
+    [self.rateButton setTitle:@"1.0x" forState:UIControlStateNormal];
+    [self.rateButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    self.rateButton.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
+    self.rateButton.layer.cornerRadius = 8;
+    [self.rateButton addTarget:self action:@selector(cycleRate) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.rateButton];
+
+    /* ---- 绑定 player.onProgress ---- */
+    __weak typeof(self) weakSelf = self;
+    [DFHPlayer shared].onProgress = ^(uint64_t playedUs, uint64_t totalUs) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            __strong typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf || strongSelf.userDraggingSlider || totalUs == 0) return;
+            strongSelf.progressSlider.value = (float)((double)playedUs / (double)totalUs);
+        });
+    };
+}
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
@@ -674,6 +762,7 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
     return %orig;
 }
 
+%end
 %end
 
 %group VolumeControlHook
