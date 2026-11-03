@@ -408,7 +408,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 }
 
 /* ---- 拖动 ---- */
--- (void)handleDrag:(UIPanGestureRecognizer *)pan {
+- (void)handleDrag:(UIPanGestureRecognizer *)pan {
     [self resetAutoHideTimer];
     if (!gDFHWindow) return;
     CGPoint t = [pan translationInView:self.view];
