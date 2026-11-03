@@ -808,30 +808,6 @@ static void DFHNotifyCallback(CFNotificationCenterRef center, void *observer,
     }
 }
 
-static void DFHAppDidEnterBackground(CFNotificationCenterRef center, void *observer,
-                                     CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
-    DFHPlayer *p = [DFHPlayer shared];
-    if (p.isPlaying) {
-        DFHLOG(@"三角洲退后台 → pauseAndSave");
-        [p pauseAndSave];
-    }
-}
-
-static void DFHAppDidBecomeActive(CFNotificationCenterRef center, void *observer,
-                                  CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
-    if (!DFHIsDeltaForceForeground()) return;
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (gDFHWindow && !gDFHWindow.hidden &&
-            [gDFHWindow.rootViewController isKindOfClass:[DFHPanelViewController class]]) {
-            [(DFHPanelViewController *)gDFHWindow.rootViewController refreshList];
-        }
-        DFHShowResumeAlertIfNeeded();
-    });
-}
-
 /* ---------------- Debug：启动时打印类/方法是否存在 ---------------- */
 
 static void DFHDebugDumpVolumeClasses(void) {
