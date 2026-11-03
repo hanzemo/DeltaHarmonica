@@ -235,6 +235,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 /* ---------------- 主面板 ---------------- */
 
 @interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
+@property (nonatomic, strong) UIView *dragBar;
 @property (nonatomic, strong) UILabel *titleLabel;
 @property (nonatomic, strong) UIButton *resizeButton;
 @property (nonatomic, strong) UIButton *closeButton;
@@ -262,7 +263,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     self.titleLabel.text = @"三角洲口琴 · 控制台";
     self.titleLabel.textColor = [UIColor whiteColor];
     self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
-    [self.view addSubview:self.titleLabel];
+
 
     self.resizeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.resizeButton setTitle:@"⤢" forState:UIControlStateNormal];
@@ -276,24 +277,27 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     [self.closeButton addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.closeButton];
 
-    UIView *dragBar = [UIView new];
-    dragBar.backgroundColor = [UIColor clearColor];
-    [self.view addSubview:dragBar];
-    [self.view sendSubviewToBack:dragBar];
+		self.dragBar = [UIView new];
+    self.dragBar.backgroundColor = [UIColor clearColor];
+    [self.view addSubview:self.dragBar];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
-    [dragBar addGestureRecognizer:pan];
+    [self.dragBar addGestureRecognizer:pan];
 
     self.statusLabel = [UILabel new];
     self.statusLabel.text = @"就绪";
     self.statusLabel.textColor = [UIColor systemGreenColor];
     self.statusLabel.font = [UIFont systemFontOfSize:13];
     [self.view addSubview:self.statusLabel];
+		self.statusLabel.adjustsFontSizeToFitWidth = YES;
+    self.statusLabel.minimumScaleFactor = 0.7;
 
     self.listHeadLabel = [UILabel new];
     self.listHeadLabel.text = @"乐谱（.mid）";
     self.listHeadLabel.textColor = [UIColor lightGrayColor];
     self.listHeadLabel.font = [UIFont systemFontOfSize:12];
     [self.view addSubview:self.listHeadLabel];
+		self.listHeadLabel.adjustsFontSizeToFitWidth = YES;
+    self.listHeadLabel.minimumScaleFactor = 0.8;
 
     self.table = [UITableView new];
     self.table.delegate = self;
@@ -302,7 +306,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     self.table.separatorColor = [UIColor colorWithWhite:0.3 alpha:1];
     [self.view addSubview:self.table];
 
-    NSArray *titles = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
+NSArray *titles = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定"];
     NSMutableArray *btns = [NSMutableArray array];
     for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -311,6 +315,8 @@ static NSArray<NSString *> *DFHKeyNames(void) {
         b.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
         b.layer.cornerRadius = 8;
         b.tag = i;
+        b.titleLabel.adjustsFontSizeToFitWidth = YES;
+        b.titleLabel.minimumScaleFactor = 0.6;
         [b addTarget:self action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:b];
         [btns addObject:b];
@@ -344,21 +350,34 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 }
 
 - (void)layoutPanel {
-    CGFloat w = self.view.bounds.size.width;
-    CGFloat h = self.view.bounds.size.height;
+    CGRect winBounds = gDFHWindow ? gDFHWindow.bounds : self.view.bounds;
+    CGFloat w = winBounds.size.width;
+    CGFloat h = winBounds.size.height;
     if (w <= 1 || h <= 1) return;
 
-    CGFloat topY = 8;
+    /* iPhone X 横屏安全区：左右各 44，底部 21 */
+    UIEdgeInsets safe = UIEdgeInsetsZero;
+    if (@available(iOS 11.0, *)) {
+        safe = gDFHWindow ? gDFHWindow.safeAreaInsets : self.view.safeAreaInsets;
+    }
+    CGFloat left = MAX(safe.left, 12);
+    CGFloat right = MAX(safe.right, 12);
+    CGFloat top = MAX(safe.top, 8);
+    CGFloat usableW = w - left - right;
 
-    self.titleLabel.frame = CGRectMake(12, topY, w - 140, 32);
-    self.resizeButton.frame = CGRectMake(w - 110, topY, 44, 32);
-    self.closeButton.frame = CGRectMake(w - 60, topY, 48, 32);
+    CGFloat topY = top;
+
+    self.dragBar.frame = CGRectMake(0, 0, w - 120, 40);
+
+    self.titleLabel.frame = CGRectMake(left, topY, usableW - 140, 32);
+    self.resizeButton.frame = CGRectMake(w - right - 100, topY, 44, 32);
+    self.closeButton.frame = CGRectMake(w - right - 50, topY, 48, 32);
     topY += 40;
 
-    self.statusLabel.frame = CGRectMake(12, topY, w - 24, 20);
+    self.statusLabel.frame = CGRectMake(left, topY, usableW, 20);
     topY += 26;
 
-    self.listHeadLabel.frame = CGRectMake(12, topY, w - 24, 20);
+    self.listHeadLabel.frame = CGRectMake(left, topY, usableW, 20);
     topY += 22;
 
     const CGFloat kBtnRowH = 44 + 16;
@@ -369,8 +388,9 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     topY += tableH + 8;
 
     NSArray<UIButton *> *btns = self.actionButtons;
-    CGFloat bw = (w - 12*2 - 8*(btns.count - 1)) / (CGFloat)btns.count;
-    CGFloat bx = 12;
+    CGFloat bw = (usableW - 8*(btns.count - 1)) / (CGFloat)btns.count;
+    if (bw < 50) bw = 50;
+    CGFloat bx = left;
     for (UIButton *b in btns) {
         b.frame = CGRectMake(bx, topY, bw, 44);
         bx += bw + 8;
@@ -378,8 +398,8 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     topY += 44 + 8;
 
     CGFloat sliderY = topY;
-    self.progressSlider.frame = CGRectMake(12, sliderY, w - 24 - 70, 30);
-    self.rateButton.frame = CGRectMake(w - 12 - 60, sliderY, 60, 30);
+    self.progressSlider.frame = CGRectMake(left, sliderY, usableW - 70, 30);
+    self.rateButton.frame = CGRectMake(w - right - 60, sliderY, 60, 30);
 }
 
 - (void)viewDidLayoutSubviews {
@@ -388,15 +408,20 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 }
 
 /* ---- 拖动 ---- */
-- (void)handleDrag:(UIPanGestureRecognizer *)pan {
+-- (void)handleDrag:(UIPanGestureRecognizer *)pan {
     [self resetAutoHideTimer];
     if (!gDFHWindow) return;
-    CGPoint t = [pan translationInView:nil];
+    CGPoint t = [pan translationInView:self.view];
     CGRect f = gDFHWindow.frame;
     f.origin.x += t.x;
     f.origin.y += t.y;
+    CGRect screen = [UIScreen mainScreen].bounds;
+    if (f.origin.x < 0) f.origin.x = 0;
+    if (f.origin.y < 0) f.origin.y = 0;
+    if (CGRectGetMaxX(f) > screen.size.width) f.origin.x = screen.size.width - f.size.width;
+    if (CGRectGetMaxY(f) > screen.size.height) f.origin.y = screen.size.height - f.size.height;
     gDFHWindow.frame = f;
-    [pan setTranslation:CGPointZero inView:nil];
+    [pan setTranslation:CGPointZero inView:self.view];
 }
 
 /* ---- 尺寸循环 ---- */
@@ -406,9 +431,9 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     self.sizeLevel = (self.sizeLevel + 1) % 3;
     CGRect r = [UIScreen mainScreen].bounds;
     CGFloat ratios[] = { 0.6, 0.75, 0.9 };
-    CGFloat ratio = ratios[self.sizeLevel];
-    CGFloat w = MIN(r.size.width * ratio, 520);
-    CGFloat h = MIN(r.size.height * ratio, 720);
+    CGFloat ratio = ratios[self.sizeLevel];	
+		CGFloat w = r.size.width * ratio;
+		CGFloat h = r.size.height * ratio;
     CGRect f = gDFHWindow.frame;
     f.size = CGSizeMake(w, h);
 
@@ -641,8 +666,8 @@ static void DFHShowPanel(void) {
         }
         if (!gDFHWindow) {
             CGRect r = [UIScreen mainScreen].bounds;
-            CGFloat w = MIN(r.size.width * 0.75, 420);
-            CGFloat h = MIN(r.size.height * 0.7, 520);
+						 CGFloat w = r.size.width * 0.85;
+						 CGFloat h = r.size.height * 0.75;
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
 
             gDFHWindow = [[DFHPanelWindow alloc] initWithFrame:wr];
