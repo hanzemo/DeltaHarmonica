@@ -306,7 +306,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     self.table.separatorColor = [UIColor colorWithWhite:0.3 alpha:1];
     [self.view addSubview:self.table];
 
-NSArray *titles = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定"];
+		NSArray *titles = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定"];
     NSMutableArray *btns = [NSMutableArray array];
     for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
