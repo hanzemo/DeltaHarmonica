@@ -235,7 +235,11 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 /* ---------------- 主面板 ---------------- */
 
 @interface DFHPanelViewController : UIViewController <UITableViewDelegate, UITableViewDataSource, UIDocumentPickerDelegate>
-@property (nonatomic, strong) UISlider *progressSlider;
+@property (nonatomic, strong) UILabel *titleLabel;
+@property (nonatomic, strong) UIButton *resizeButton;
+@property (nonatomic, strong) UIButton *closeButton;
+@property (nonatomic, strong) UILabel *listHeadLabel;
+@property (nonatomic, strong) NSArray<UIButton *> *actionButtons;@property (nonatomic, strong) UISlider *progressSlider;
 @property (nonatomic, strong) UIButton *rateButton;
 @property (nonatomic, assign) BOOL userDraggingSlider;
 @property (nonatomic, strong) UITableView *table;
@@ -249,98 +253,71 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-
     self.sizeLevel = 1;
-    self.view.frame = self.view.bounds;
-    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.view.backgroundColor = [UIColor colorWithWhite:0.1 alpha:0.92];
     self.view.layer.cornerRadius = 16;
     self.view.clipsToBounds = YES;
 
-    CGFloat w = self.view.bounds.size.width;
-    if (w <= 1) {
-        w = [UIScreen mainScreen].bounds.size.width * 0.9;
-        self.view.frame = CGRectMake(0, 0, w, [UIScreen mainScreen].bounds.size.height * 0.7);
-    }
-    CGFloat topY = 8;
+    self.titleLabel = [UILabel new];
+    self.titleLabel.text = @"三角洲口琴 · 控制台";
+    self.titleLabel.textColor = [UIColor whiteColor];
+    self.titleLabel.font = [UIFont boldSystemFontOfSize:16];
+    [self.view addSubview:self.titleLabel];
 
-    /* 标题 + 尺寸 + 关闭 */
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-140, 32)];
-    title.text = @"三角洲口琴 · 控制台";
-    title.textColor = [UIColor whiteColor];
-    title.font = [UIFont boldSystemFontOfSize:16];
-    [self.view addSubview:title];
+    self.resizeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.resizeButton setTitle:@"⤢" forState:UIControlStateNormal];
+    [self.resizeButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+    [self.resizeButton addTarget:self action:@selector(cycleSize) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.resizeButton];
 
-    UIButton *resize = [UIButton buttonWithType:UIButtonTypeSystem];
-    resize.frame = CGRectMake(w-110, topY, 44, 32);
-    [resize setTitle:@"⤢" forState:UIControlStateNormal];
-    [resize setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    [resize addTarget:self action:@selector(cycleSize) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:resize];
+    self.closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.closeButton setTitle:@"收起" forState:UIControlStateNormal];
+    [self.closeButton setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
+    [self.closeButton addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
+    [self.view addSubview:self.closeButton];
 
-    UIButton *close = [UIButton buttonWithType:UIButtonTypeSystem];
-    close.frame = CGRectMake(w-60, topY, 48, 32);
-    [close setTitle:@"收起" forState:UIControlStateNormal];
-    [close setTitleColor:[UIColor systemRedColor] forState:UIControlStateNormal];
-    [close addTarget:self action:@selector(hidePanel) forControlEvents:UIControlEventTouchUpInside];
-    [self.view addSubview:close];
-
-    /* 标题栏拖动 */
-    UIView *dragBar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, w, 48)];
+    UIView *dragBar = [UIView new];
     dragBar.backgroundColor = [UIColor clearColor];
     [self.view addSubview:dragBar];
     [self.view sendSubviewToBack:dragBar];
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(handleDrag:)];
     [dragBar addGestureRecognizer:pan];
 
-    topY += 40;
-
-    self.statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
+    self.statusLabel = [UILabel new];
     self.statusLabel.text = @"就绪";
     self.statusLabel.textColor = [UIColor systemGreenColor];
     self.statusLabel.font = [UIFont systemFontOfSize:13];
     [self.view addSubview:self.statusLabel];
-    topY += 26;
 
-    UILabel *listHead = [[UILabel alloc] initWithFrame:CGRectMake(12, topY, w-24, 20)];
-    listHead.text = @"乐谱（.mid）";
-    listHead.textColor = [UIColor lightGrayColor];
-    listHead.font = [UIFont systemFontOfSize:12];
-    [self.view addSubview:listHead];
-    topY += 22;
+    self.listHeadLabel = [UILabel new];
+    self.listHeadLabel.text = @"乐谱（.mid）";
+    self.listHeadLabel.textColor = [UIColor lightGrayColor];
+    self.listHeadLabel.font = [UIFont systemFontOfSize:12];
+    [self.view addSubview:self.listHeadLabel];
 
-    /* 表格：从 topY 到 按钮行上方 */
-    CGFloat btnRowH = 44 + 16;
-    CGFloat tableH = self.view.bounds.size.height - topY - btnRowH - 8;
-    if (tableH < 60) tableH = 60;
-    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, topY, w, tableH) style:UITableViewStylePlain];
+    self.table = [UITableView new];
     self.table.delegate = self;
     self.table.dataSource = self;
     self.table.backgroundColor = [UIColor clearColor];
     self.table.separatorColor = [UIColor colorWithWhite:0.3 alpha:1];
     [self.view addSubview:self.table];
 
-    topY += tableH + 8;
-
-    NSArray *buttons = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
-    CGFloat bw = (w - 12*2 - 8*(buttons.count-1)) / (CGFloat)buttons.count;
-    CGFloat bx = 12;
-    for (NSUInteger i = 0; i < buttons.count; i++) {
+    NSArray *titles = @[@"▶ 播放", @"⏹ 停止", @"🔁 重播", @"📂 导入", @"🎯 标定", @"🛡 白名单"];
+    NSMutableArray *btns = [NSMutableArray array];
+    for (NSUInteger i = 0; i < titles.count; i++) {
         UIButton *b = [UIButton buttonWithType:UIButtonTypeSystem];
-        b.frame = CGRectMake(bx, topY, bw, 44);
-        [b setTitle:buttons[i] forState:UIControlStateNormal];
+        [b setTitle:titles[i] forState:UIControlStateNormal];
         [b setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         b.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
         b.layer.cornerRadius = 8;
         b.tag = i;
         [b addTarget:self action:@selector(buttonTapped:) forControlEvents:UIControlEventTouchUpInside];
         [self.view addSubview:b];
-        bx += bw + 8;
+        [btns addObject:b];
     }
+    self.actionButtons = btns;
 
-    /* ---- 进度条 ---- */
-    CGFloat sliderY = topY + 44 + 8;
-    self.progressSlider = [[UISlider alloc] initWithFrame:CGRectMake(12, sliderY, w - 24 - 70, 30)];
+    self.progressSlider = [UISlider new];
     self.progressSlider.minimumValue = 0;
     self.progressSlider.maximumValue = 1;
     self.progressSlider.value = 0;
@@ -348,9 +325,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     [self.progressSlider addTarget:self action:@selector(sliderTouchUp) forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     [self.view addSubview:self.progressSlider];
 
-    /* ---- 倍速按钮 ---- */
     self.rateButton = [UIButton buttonWithType:UIButtonTypeSystem];
-    self.rateButton.frame = CGRectMake(w - 12 - 60, sliderY, 60, 30);
     [self.rateButton setTitle:@"1.0x" forState:UIControlStateNormal];
     [self.rateButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     self.rateButton.backgroundColor = [UIColor colorWithWhite:0.3 alpha:1];
@@ -358,7 +333,6 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     [self.rateButton addTarget:self action:@selector(cycleRate) forControlEvents:UIControlEventTouchUpInside];
     [self.view addSubview:self.rateButton];
 
-    /* ---- 绑定 player.onProgress ---- */
     __weak typeof(self) weakSelf = self;
     [DFHPlayer shared].onProgress = ^(uint64_t playedUs, uint64_t totalUs) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -369,12 +343,48 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     };
 }
 
-- (void)viewDidLayoutSubviews {
-    [super viewDidLayoutSubviews];
+- (void)layoutPanel {
     CGFloat w = self.view.bounds.size.width;
     CGFloat h = self.view.bounds.size.height;
-    CGFloat btnRowH = 44 + 16;
-    self.table.frame = CGRectMake(0, 96, w, h - 96 - btnRowH - 8);
+    if (w <= 1 || h <= 1) return;
+
+    CGFloat topY = 8;
+
+    self.titleLabel.frame = CGRectMake(12, topY, w - 140, 32);
+    self.resizeButton.frame = CGRectMake(w - 110, topY, 44, 32);
+    self.closeButton.frame = CGRectMake(w - 60, topY, 48, 32);
+    topY += 40;
+
+    self.statusLabel.frame = CGRectMake(12, topY, w - 24, 20);
+    topY += 26;
+
+    self.listHeadLabel.frame = CGRectMake(12, topY, w - 24, 20);
+    topY += 22;
+
+    const CGFloat kBtnRowH = 44 + 16;
+    const CGFloat kSliderRowH = 30 + 8 + 8;
+    CGFloat tableH = h - topY - kBtnRowH - kSliderRowH - 8;
+    if (tableH < 60) tableH = 60;
+    self.table.frame = CGRectMake(0, topY, w, tableH);
+    topY += tableH + 8;
+
+    NSArray<UIButton *> *btns = self.actionButtons;
+    CGFloat bw = (w - 12*2 - 8*(btns.count - 1)) / (CGFloat)btns.count;
+    CGFloat bx = 12;
+    for (UIButton *b in btns) {
+        b.frame = CGRectMake(bx, topY, bw, 44);
+        bx += bw + 8;
+    }
+    topY += 44 + 8;
+
+    CGFloat sliderY = topY;
+    self.progressSlider.frame = CGRectMake(12, sliderY, w - 24 - 70, 30);
+    self.rateButton.frame = CGRectMake(w - 12 - 60, sliderY, 60, 30);
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutPanel];
 }
 
 /* ---- 拖动 ---- */
@@ -401,7 +411,20 @@ static NSArray<NSString *> *DFHKeyNames(void) {
     CGFloat h = MIN(r.size.height * ratio, 720);
     CGRect f = gDFHWindow.frame;
     f.size = CGSizeMake(w, h);
+
+    CGRect screen = r;
+    if (f.origin.x < 0) f.origin.x = 0;
+    if (f.origin.y < 0) f.origin.y = 0;
+    if (CGRectGetMaxX(f) > screen.size.width) f.origin.x = screen.size.width - f.size.width;
+    if (CGRectGetMaxY(f) > screen.size.height) f.origin.y = screen.size.height - f.size.height;
     gDFHWindow.frame = f;
+
+    UIViewController *root = gDFHWindow.rootViewController;
+    if (root) {
+        root.view.frame = CGRectMake(0, 0, w, h);
+        [root.view setNeedsLayout];
+        [root.view layoutIfNeeded];
+    }
     DFHLOG(@"尺寸切换 level=%ld → %.0fx%.0f", (long)self.sizeLevel, w, h);
 }
 
@@ -596,8 +619,26 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 /* ---------------- 悬浮窗管理 ---------------- */
 
+/* 竖屏判断（iOS 13+ 用 windowScene.interfaceOrientation，避免 statusBarOrientation 的 deprecated 警告） */
+static BOOL DFHIsPortrait(void) {
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if ([scene isKindOfClass:[UIWindowScene class]]) {
+                UIInterfaceOrientation o = ((UIWindowScene *)scene).interfaceOrientation;
+                return (o == UIInterfaceOrientationPortrait ||
+                        o == UIInterfaceOrientationPortraitUpsideDown);
+            }
+        }
+    }
+    return NO;
+}
+
 static void DFHShowPanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
+        if (DFHIsPortrait()) {
+            DFHLOG(@"竖屏，拒绝显示面板");
+            return;
+        }
         if (!gDFHWindow) {
             CGRect r = [UIScreen mainScreen].bounds;
             CGFloat w = MIN(r.size.width * 0.75, 420);
@@ -735,6 +776,12 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
 
     if (!df) return NO;               /* 非三角洲：放行音量 */
 
+    /* 竖屏：不弹面板，放行音量 */
+    if (DFHIsPortrait()) {
+        DFHLOG(@"[%s] 竖屏，放行音量", where);
+        return NO;
+    }
+
     if (visible) {
         DFHHidePanel();
         DFHLOG(@"[%s] 面板可见 → 隐藏（播放继续）", where);
@@ -854,7 +901,7 @@ static void DFHInit(void) {
     CFNotificationCenterAddObserver(nc, NULL, DFHNotifyCallback, kDFHNotifyToggle, NULL,
                                     CFNotificationSuspensionBehaviorDeliverImmediately);
 
-/* 前后台通知（SpringBoard 里也能收到） */
+    /* 前后台通知（SpringBoard 里也能收到） */
     NSNotificationCenter *localNC = [NSNotificationCenter defaultCenter];
     [localNC addObserverForName:UIApplicationDidEnterBackgroundNotification
                          object:nil
@@ -879,6 +926,19 @@ static void DFHInit(void) {
         }
         DFHShowResumeAlertIfNeeded();
     }];
+
+    /* 转竖屏自动隐藏面板 */
+    [localNC addObserverForName:UIApplicationWillChangeStatusBarOrientationNotification
+                         object:nil
+                          queue:[NSOperationQueue mainQueue]
+                     usingBlock:^(NSNotification *note) {
+        (void)note;
+        if (DFHIsPortrait() && gDFHWindow && !gDFHWindow.hidden) {
+            DFHLOG(@"转竖屏，自动隐藏面板");
+            gDFHWindow.hidden = YES;
+        }
+    }];
+
     %init(SpringBoardVolumeHook);
     %init(VolumeControlHook);
 
