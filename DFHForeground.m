@@ -120,12 +120,10 @@ NSString *DFHCurrentFrontmostBundleID(void) {
 }
 
 BOOL DFHIsDeltaForceForeground(void) {
-    if (!DFHIsWhitelistEnabled()) return YES;   /* 未启用白名单则放行 */
     NSString *bid = DFHCurrentFrontmostBundleID();
     if (!bid) return NO;
-    return [gDFHExtraBundles() containsObject:bid] ||
-           [bid hasPrefix:@"com.tencent"] ||    /* 兜底：腾讯系 */
-           [bid hasPrefix:@"com.garena"];
+    return [bid isEqualToString:DFH_BUNDLE_CN] ||
+           [bid isEqualToString:DFH_BUNDLE_INT];
 }
 
 void DFHAddExtraBundleID(NSString *bundleID) {
