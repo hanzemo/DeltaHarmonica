@@ -937,6 +937,11 @@ static void DFHDebugDumpVolumeClasses(void) {
 __attribute__((constructor))
 static void DFHInit(void) {
     NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier] ?: @"";
+
+		/* SpringBoard 重启时清空日志 */
+    NSString *logPath = @"/var/mobile/Documents/dfh.log";
+    [[NSFileManager defaultManager] removeItemAtPath:logPath error:nil];
+
     DFHLOG(@"构造器进入：bundle=%@", bundleId);
     if (![bundleId isEqualToString:@"com.apple.springboard"]) {
         DFHLOG(@"非 SpringBoard，跳过初始化");
