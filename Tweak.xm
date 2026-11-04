@@ -195,16 +195,25 @@ static UIWindow *gDFHWindow = nil;
     /* 标定时隐藏面板 */
     if (gDFHWindow) gDFHWindow.hidden = YES;
 
-    /* 独立全屏遮罩 window，不依赖 presentViewController */
-    UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    /* 选游戏所在场景，取横屏 bounds */
+    CGRect r = [UIScreen mainScreen].bounds;
+    UIWindowScene *targetScene = nil;
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
             if (scene.activationState != UISceneActivationStateForegroundActive) continue;
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
             if ([scene.session.role containsString:@"SystemAperture"]) continue;
-            pickerWin.windowScene = (UIWindowScene *)scene;
-            break;
+            if ([scene.session.role containsString:@"Application"]) {
+                targetScene = (UIWindowScene *)scene;
+                break;
+            }
         }
+    }
+    if (targetScene) r = targetScene.coordinateSpace.bounds;
+
+    UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
+    if (targetScene) {
+        pickerWin.windowScene = targetScene;
     }
     pickerWin.windowLevel = UIWindowLevelAlert + 2000;
     pickerWin.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
@@ -214,7 +223,7 @@ static UIWindow *gDFHWindow = nil;
     pickerWin.rootViewController = picker;
     pickerWin.hidden = NO;
 
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, [UIScreen mainScreen].bounds.size.width, 44)];
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, r.size.width, 44)];
     hint.text = [NSString stringWithFormat:@"请点击「%@」在屏幕上的位置", DFHKeyNames()[idx]];
     hint.textAlignment = NSTextAlignmentCenter;
     hint.textColor = [UIColor whiteColor];
@@ -228,25 +237,6 @@ static UIWindow *gDFHWindow = nil;
 
     objc_setAssociatedObject(tap, "idx", @(idx), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(tap, "pickerWin", pickerWin, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-- (void)handlePickTap:(UITapGestureRecognizer *)tap {
-    NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
-    NSInteger idx = idxNum.integerValue;
-    CGPoint p = [tap locationInView:nil];   /* 窗口坐标，等价屏幕绝对值 */
-    DFHStoreCoord(idx, p);
-    DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
-
-    /* 关闭遮罩 window */
-    UIWindow *pickerWin = objc_getAssociatedObject(tap, "pickerWin");
-    if (pickerWin) {
-        pickerWin.hidden = YES;
-        pickerWin.rootViewController = nil;
-    }
-
-    /* 恢复面板 */
-    if (gDFHWindow) gDFHWindow.hidden = NO;
-    [self.table reloadData];
 }
 
 @end
