@@ -96,8 +96,6 @@ static void DFHReplayLast(void) {
 
 /* ---------------- 悬浮窗 ---------------- */
 
-static UIWindow *gDFHWindow = nil;
-
 @interface DFHPanelWindow : UIWindow
 @end
 @implementation DFHPanelWindow
@@ -116,6 +114,8 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 }
 
 @class DFHPanelViewController;
+
+static UIWindow *gDFHWindow = nil;
 
 /* ---------------- 标定界面 ---------------- */
 
@@ -159,6 +159,7 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 - (void)goBack {
     if (self.onFinish) self.onFinish();
     [self dismissViewControllerAnimated:YES completion:nil];
+		if (gDFHWindow) gDFHWindow.hidden = NO;
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -191,10 +192,13 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 }
 
 - (void)startPickForIndex:(NSInteger)idx {
+    /* 标定时隐藏面板窗口，避免挡住游戏画面 */
+    if (gDFHWindow) gDFHWindow.hidden = YES;
     /* 全屏透明遮罩，接管一次点击取坐标 */
-    UIViewController *picker = [UIViewController new];
+		UIViewController *picker = [UIViewController new];
     picker.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
     picker.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    picker.view.frame = [UIScreen mainScreen].bounds;   /* 强制全屏绝对值 */
 
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, [UIScreen mainScreen].bounds.size.width, 44)];
     hint.text = [NSString stringWithFormat:@"请点击「%@」在屏幕上的位置", DFHKeyNames()[idx]];
@@ -210,13 +214,14 @@ static NSArray<NSString *> *DFHKeyNames(void) {
 
     objc_setAssociatedObject(tap, "idx", @(idx), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    [self presentViewController:picker animated:NO completion:nil];
+		UIViewController *presenter = gDFHWindow.rootViewController ?: self;
+    [presenter presentViewController:picker animated:NO completion:nil];
 }
 
 - (void)handlePickTap:(UITapGestureRecognizer *)tap {
     NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
     NSInteger idx = idxNum.integerValue;
-    CGPoint p = [tap locationInView:tap.view];
+    CGPoint p = [tap locationInView:nil];   /* nil = 窗口坐标，等价屏幕绝对值 */
     DFHStoreCoord(idx, p);
     DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
 
@@ -228,6 +233,8 @@ static NSArray<NSString *> *DFHKeyNames(void) {
         [(UIViewController *)responder dismissViewControllerAnimated:NO completion:nil];
     }
     [self.table reloadData];
+		/* 标定完成，恢复面板显示 */
+    if (gDFHWindow) gDFHWindow.hidden = NO;
 }
 
 @end
