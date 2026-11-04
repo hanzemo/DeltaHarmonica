@@ -194,7 +194,6 @@ static UIWindow *gDFHWindow = nil;
 - (void)startPickForIndex:(NSInteger)idx {
     /* 标定时隐藏面板 */
     if (gDFHWindow) gDFHWindow.hidden = YES;
-    [self.autoHideTimer invalidate];
 
     /* 独立全屏遮罩 window，不依赖 presentViewController */
     UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
