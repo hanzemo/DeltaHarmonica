@@ -157,9 +157,9 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)goBack {
+    if (gDFHWindow) gDFHWindow.hidden = NO;
     if (self.onFinish) self.onFinish();
     [self dismissViewControllerAnimated:YES completion:nil];
-		if (gDFHWindow) gDFHWindow.hidden = NO;
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -192,13 +192,28 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)startPickForIndex:(NSInteger)idx {
-    /* 标定时隐藏面板窗口，避免挡住游戏画面 */
+    /* 标定时隐藏面板 */
     if (gDFHWindow) gDFHWindow.hidden = YES;
-    /* 全屏透明遮罩，接管一次点击取坐标 */
-		UIViewController *picker = [UIViewController new];
-    picker.view.backgroundColor = [UIColor colorWithWhite:0 alpha:0.15];
-    picker.modalPresentationStyle = UIModalPresentationOverFullScreen;
-    picker.view.frame = [UIScreen mainScreen].bounds;   /* 强制全屏绝对值 */
+    [self.autoHideTimer invalidate];
+
+    /* 独立全屏遮罩 window，不依赖 presentViewController */
+    UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    if (@available(iOS 13.0, *)) {
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            if ([scene.session.role containsString:@"SystemAperture"]) continue;
+            pickerWin.windowScene = (UIWindowScene *)scene;
+            break;
+        }
+    }
+    pickerWin.windowLevel = UIWindowLevelAlert + 2000;
+    pickerWin.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+
+    UIViewController *picker = [UIViewController new];
+    picker.view.backgroundColor = [UIColor clearColor];
+    pickerWin.rootViewController = picker;
+    pickerWin.hidden = NO;
 
     UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, [UIScreen mainScreen].bounds.size.width, 44)];
     hint.text = [NSString stringWithFormat:@"请点击「%@」在屏幕上的位置", DFHKeyNames()[idx]];
@@ -213,28 +228,26 @@ static UIWindow *gDFHWindow = nil;
     [picker.view addGestureRecognizer:tap];
 
     objc_setAssociatedObject(tap, "idx", @(idx), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-		UIViewController *presenter = gDFHWindow.rootViewController ?: self;
-    [presenter presentViewController:picker animated:NO completion:nil];
+    objc_setAssociatedObject(tap, "pickerWin", pickerWin, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 - (void)handlePickTap:(UITapGestureRecognizer *)tap {
     NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
     NSInteger idx = idxNum.integerValue;
-    CGPoint p = [tap locationInView:nil];   /* nil = 窗口坐标，等价屏幕绝对值 */
+    CGPoint p = [tap locationInView:nil];   /* 窗口坐标，等价屏幕绝对值 */
     DFHStoreCoord(idx, p);
     DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
 
-    UIResponder *responder = tap.view.nextResponder;
-    while (responder && ![responder isKindOfClass:[UIViewController class]]) {
-        responder = responder.nextResponder;
+    /* 关闭遮罩 window */
+    UIWindow *pickerWin = objc_getAssociatedObject(tap, "pickerWin");
+    if (pickerWin) {
+        pickerWin.hidden = YES;
+        pickerWin.rootViewController = nil;
     }
-    if ([responder isKindOfClass:[UIViewController class]]) {
-        [(UIViewController *)responder dismissViewControllerAnimated:NO completion:nil];
-    }
-    [self.table reloadData];
-		/* 标定完成，恢复面板显示 */
+
+    /* 恢复面板 */
     if (gDFHWindow) gDFHWindow.hidden = NO;
+    [self.table reloadData];
 }
 
 @end
@@ -258,6 +271,14 @@ static UIWindow *gDFHWindow = nil;
 @end
 
 @implementation DFHPanelViewController
+
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskLandscapeLeft | UIInterfaceOrientationMaskLandscapeRight;
+}
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -667,28 +688,30 @@ static BOOL DFHIsPortrait(void) {
 
 static void DFHShowPanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (DFHIsPortrait()) {
-            DFHLOG(@"竖屏，拒绝显示面板");
-            return;
-        }
         if (!gDFHWindow) {
             CGRect r = [UIScreen mainScreen].bounds;
-						 CGFloat w = r.size.width * 0.85;
-						 CGFloat h = r.size.height * 0.75;
+            UIWindowScene *targetScene = nil;
+            if (@available(iOS 13.0, *)) {
+                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+                    if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+                    if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+                    if ([scene.session.role containsString:@"SystemAperture"]) continue;
+                    targetScene = (UIWindowScene *)scene;
+                    break;
+                }
+            }
+            if (targetScene) {
+                r = targetScene.coordinateSpace.bounds;
+            }
+            CGFloat w = r.size.width * 0.75;
+            CGFloat h = r.size.height * 0.7;
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
 
             gDFHWindow = [[DFHPanelWindow alloc] initWithFrame:wr];
-
-            if (@available(iOS 13.0, *)) {
-                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                    if (scene.activationState == UISceneActivationStateForegroundActive &&
-                        [scene isKindOfClass:[UIWindowScene class]]) {
-                        gDFHWindow.windowScene = (UIWindowScene *)scene;
-                        break;
-                    }
-                }
+            gDFHWindow.autoresizingMask = UIViewAutoresizingNone;
+            if (targetScene) {
+                gDFHWindow.windowScene = targetScene;
             }
-
             gDFHWindow.rootViewController = [DFHPanelViewController new];
             gDFHWindow.backgroundColor = [UIColor clearColor];
             DFHLOG(@"创建窗口: %@ windowScene=%@",
@@ -957,19 +980,6 @@ static void DFHInit(void) {
             [(DFHPanelViewController *)gDFHWindow.rootViewController refreshList];
         }
         DFHShowResumeAlertIfNeeded();
-    }];
-
-/* 转竖屏自动隐藏面板（用 UIDevice 方向通知，避免 deprecated 警告） */
-    [[UIDevice currentDevice] beginGeneratingDeviceOrientationNotifications];
-    [localNC addObserverForName:UIDeviceOrientationDidChangeNotification
-                         object:nil
-                          queue:[NSOperationQueue mainQueue]
-                     usingBlock:^(NSNotification *note) {
-        (void)note;
-        if (DFHIsPortrait() && gDFHWindow && !gDFHWindow.hidden) {
-            DFHLOG(@"转竖屏，自动隐藏面板");
-            gDFHWindow.hidden = YES;
-        }
     }];
 
     %init(SpringBoardVolumeHook);
