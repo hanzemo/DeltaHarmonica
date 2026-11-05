@@ -127,6 +127,14 @@ static UIWindow *gDFHWindow = nil;
 
 @implementation DFHCalibrationViewController
 
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskLandscapeLeft | UIInterfaceOrientationMaskLandscapeRight;
+}
+
+- (BOOL)shouldAutorotate {
+    return YES;
+}
+
 - (instancetype)initWithFinishBlock:(void (^)(void))block {
     if (self = [super init]) { self.onFinish = block; }
     return self;
@@ -136,30 +144,45 @@ static UIWindow *gDFHWindow = nil;
     [super viewDidLoad];
     self.view.backgroundColor = [UIColor colorWithWhite:0.12 alpha:0.98];
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(12, 8, self.view.bounds.size.width - 80, 32)];
+    UILabel *title = [UILabel new];
     title.text = @"口琴键位标定";
     title.textColor = [UIColor whiteColor];
     title.font = [UIFont boldSystemFontOfSize:16];
+    title.adjustsFontSizeToFitWidth = YES;
+    title.minimumScaleFactor = 0.6;
+    title.tag = 1001;
     [self.view addSubview:title];
 
     UIButton *back = [UIButton buttonWithType:UIButtonTypeSystem];
-    back.frame = CGRectMake(self.view.bounds.size.width - 60, 8, 48, 32);
     [back setTitle:@"返回" forState:UIControlStateNormal];
+    [back setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     [back addTarget:self action:@selector(goBack) forControlEvents:UIControlEventTouchUpInside];
+    back.tag = 1002;
     [self.view addSubview:back];
 
-    self.table = [[UITableView alloc] initWithFrame:CGRectMake(0, 48, self.view.bounds.size.width, self.view.bounds.size.height - 48)
-                                              style:UITableViewStylePlain];
+    self.table = [UITableView new];
     self.table.dataSource = self;
     self.table.delegate = self;
     self.table.backgroundColor = [UIColor clearColor];
     [self.view addSubview:self.table];
 }
 
-- (void)goBack {
-    if (gDFHWindow) gDFHWindow.hidden = NO;
-    if (self.onFinish) self.onFinish();
-    [self dismissViewControllerAnimated:YES completion:nil];
+- (void)layoutCal {
+    CGRect b = self.view.bounds;
+    CGFloat w = b.size.width;
+    CGFloat h = b.size.height;
+    if (w <= 1 || h <= 1) return;
+
+    UILabel *title = [self.view viewWithTag:1001];
+    UIButton *back = [self.view viewWithTag:1002];
+    title.frame = CGRectMake(12, 8, w - 80, 32);
+    back.frame = CGRectMake(w - 60, 8, 48, 32);
+    self.table.frame = CGRectMake(0, 48, w, h - 48);
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self layoutCal];
 }
 
 - (NSInteger)tableView:(UITableView *)tv numberOfRowsInSection:(NSInteger)s {
@@ -192,10 +215,8 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)startPickForIndex:(NSInteger)idx {
-    /* 标定时隐藏面板 */
     if (gDFHWindow) gDFHWindow.hidden = YES;
 
-    /* 选游戏所在场景，取横屏 bounds */
     CGRect r = [UIScreen mainScreen].bounds;
     UIWindowScene *targetScene = nil;
     if (@available(iOS 13.0, *)) {
@@ -212,9 +233,7 @@ static UIWindow *gDFHWindow = nil;
     if (targetScene) r = targetScene.coordinateSpace.bounds;
 
     UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
-    if (targetScene) {
-        pickerWin.windowScene = targetScene;
-    }
+    if (targetScene) pickerWin.windowScene = targetScene;
     pickerWin.windowLevel = UIWindowLevelAlert + 2000;
     pickerWin.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
 
@@ -223,12 +242,13 @@ static UIWindow *gDFHWindow = nil;
     pickerWin.rootViewController = picker;
     pickerWin.hidden = NO;
 
-    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectMake(0, 80, r.size.width, 44)];
+    UILabel *hint = [UILabel new];
     hint.text = [NSString stringWithFormat:@"请点击「%@」在屏幕上的位置", DFHKeyNames()[idx]];
     hint.textAlignment = NSTextAlignmentCenter;
     hint.textColor = [UIColor whiteColor];
     hint.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
     hint.font = [UIFont systemFontOfSize:15];
+    hint.frame = CGRectMake(0, 80, r.size.width, 44);
     [picker.view addSubview:hint];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handlePickTap:)];
@@ -607,7 +627,8 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
     DFHCalibrationViewController *cal = [[DFHCalibrationViewController alloc] initWithFinishBlock:^{
         [weakSelf refreshList];
     }];
-    [self presentViewController:cal animated:YES completion:nil];
+    UIViewController *presenter = gDFHWindow.rootViewController ?: self;
+    [presenter presentViewController:cal animated:YES completion:nil];
 }
 
 - (void)refreshList {
