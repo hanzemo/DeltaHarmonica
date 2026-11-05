@@ -168,9 +168,12 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)layoutCal {
-    CGRect b = self.view.bounds;
+    CGRect b = gDFHWindow ? gDFHWindow.bounds : self.view.bounds;
     CGFloat w = b.size.width;
     CGFloat h = b.size.height;
+    if (w < h) {
+        CGFloat tmp = w; w = h; h = tmp;
+    }
     if (w <= 1 || h <= 1) return;
 
     UILabel *title = [self.view viewWithTag:1001];
@@ -257,6 +260,25 @@ static UIWindow *gDFHWindow = nil;
 
     objc_setAssociatedObject(tap, "idx", @(idx), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(tap, "pickerWin", pickerWin, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+- (void)handlePickTap:(UITapGestureRecognizer *)tap {
+    NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
+    NSInteger idx = idxNum.integerValue;
+    CGPoint p = [tap locationInView:nil];
+    DFHStoreCoord(idx, p);
+    DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
+
+    /* 关闭遮罩 window */
+    UIWindow *pickerWin = objc_getAssociatedObject(tap, "pickerWin");
+    if (pickerWin) {
+        pickerWin.hidden = YES;
+        /* 不置 rootViewController = nil，避免 picker 被释放时 gesture target 悬空 */
+    }
+
+    /* 恢复面板 */
+    if (gDFHWindow) gDFHWindow.hidden = NO;
+    [self.table reloadData];
 }
 
 @end
