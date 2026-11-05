@@ -661,15 +661,15 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 
 /* ---------------- 悬浮窗管理 ---------------- */
 
-/* 竖屏判断（iOS 13+ 用 windowScene.interfaceOrientation，避免 statusBarOrientation 的 deprecated 警告） */
 static BOOL DFHIsPortrait(void) {
     if (@available(iOS 13.0, *)) {
         for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if ([scene isKindOfClass:[UIWindowScene class]]) {
-                UIInterfaceOrientation o = ((UIWindowScene *)scene).interfaceOrientation;
-                return (o == UIInterfaceOrientationPortrait ||
-                        o == UIInterfaceOrientationPortraitUpsideDown);
-            }
+            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            if ([scene.session.role containsString:@"SystemAperture"]) continue;
+            UIInterfaceOrientation o = ((UIWindowScene *)scene).interfaceOrientation;
+            return (o == UIInterfaceOrientationPortrait ||
+                    o == UIInterfaceOrientationPortraitUpsideDown);
         }
     }
     return NO;
