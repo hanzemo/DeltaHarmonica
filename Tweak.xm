@@ -660,21 +660,6 @@ didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
 @end
 
 /* ---------------- 悬浮窗管理 ---------------- */
-
-static BOOL DFHIsPortrait(void) {
-    if (@available(iOS 13.0, *)) {
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState != UISceneActivationStateForegroundActive) continue;
-            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-            if ([scene.session.role containsString:@"SystemAperture"]) continue;
-            CGRect b = ((UIWindowScene *)scene).coordinateSpace.bounds;
-            return b.size.height > b.size.width;
-        }
-    }
-    CGRect bounds = [UIScreen mainScreen].bounds;
-    return bounds.size.height > bounds.size.width;
-}
-
 static void DFHShowPanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gDFHWindow) {
