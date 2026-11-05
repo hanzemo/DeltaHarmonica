@@ -1,4 +1,3 @@
-```markdown
 # DeltaHarmonica — 三角洲行动·守夜人口琴 自动演奏插件
 
 一个 iOS 越狱 tweak，让《三角洲行动》里的守夜人口琴根据 **MIDI 文件自动吹奏**。
@@ -76,8 +75,6 @@ digitizer 事件并全局派发到前台 App。演奏时把 MIDI 音符序列按
 
 ## 二、目录结构
 
-```
-
 DeltaHarmonica/
 ├── control                 # Debian 包元信息
 ├── Makefile                # Theos 编译（roothide scheme，tweak + 命令行工具）
@@ -92,8 +89,6 @@ DeltaHarmonica/
 ├── layout/
 │   └── Library/PreferenceBundles/DeltaHarmonicaPrefs.bundle/
 └── README.md
-
-```
 
 ---
 
