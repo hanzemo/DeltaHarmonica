@@ -167,6 +167,17 @@ static UIWindow *gDFHWindow = nil;
     [self.view addSubview:self.table];
 }
 
+- (void)goBack {
+    if (gDFHWindow) gDFHWindow.hidden = NO;
+    if (self.onFinish) self.onFinish();
+    UIViewController *presenter = self.presentingViewController;
+    if (presenter) {
+        [presenter dismissViewControllerAnimated:YES completion:nil];
+    } else if (gDFHWindow.rootViewController) {
+        [gDFHWindow.rootViewController dismissViewControllerAnimated:YES completion:nil];
+    }
+}
+
 - (void)layoutCal {
     CGRect b = gDFHWindow ? gDFHWindow.bounds : self.view.bounds;
     CGFloat w = b.size.width;
@@ -233,9 +244,12 @@ static UIWindow *gDFHWindow = nil;
             }
         }
     }
-    if (targetScene) r = targetScene.coordinateSpace.bounds;
-
-    UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
+		if (targetScene) r = targetScene.coordinateSpace.bounds;
+		/* 强制横屏 */
+		if (r.size.height > r.size.width) {
+		    r = CGRectMake(0, 0, r.size.height, r.size.width);
+		}
+		UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
     if (targetScene) pickerWin.windowScene = targetScene;
     pickerWin.windowLevel = UIWindowLevelAlert + 2000;
     pickerWin.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
@@ -717,11 +731,15 @@ static void DFHShowPanel(void) {
                     break;
                 }
             }
-            if (targetScene) {
-                r = targetScene.coordinateSpace.bounds;
-            }
-            CGFloat w = r.size.width * 0.75;
-            CGFloat h = r.size.height * 0.7;
+						if (targetScene) {
+				    r = targetScene.coordinateSpace.bounds;
+						 }
+						 /* 强制横屏 */
+						 if (r.size.height > r.size.width) {
+								 r = CGRectMake(0, 0, r.size.height, r.size.width);
+						 }
+						 CGFloat w = r.size.width * 0.75;
+						 CGFloat h = r.size.height * 0.7;
             CGRect wr = CGRectMake((r.size.width - w)/2, (r.size.height - h)/2, w, h);
 
             gDFHWindow = [[DFHPanelWindow alloc] initWithFrame:wr];
