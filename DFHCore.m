@@ -35,6 +35,7 @@ typedef struct __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
 
 extern IOHIDEventSystemClientRef IOHIDEventSystemClientCreate(CFAllocatorRef allocator);
 extern void IOHIDEventSystemClientDispatchEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event);
+extern void IOHIDEventSetSenderID(IOHIDEventRef event, uint64_t senderID);
 
 /* 事件阶段常量 */
 #define kDFH_TouchPhase_Began 0x01
@@ -157,9 +158,11 @@ static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uin
         }
     }
 
-    if (ev) {
+		if (ev) {
+        /* 关键：打上合法 SenderID，否则系统会静默丢弃合成触摸 */
+        IOHIDEventSetSenderID(ev, 0x8000000817319372ULL);
         IOHIDEventSystemClientDispatchEvent(client, ev);
-        DFHLOG(@"SendTouch ok phase=%d x=%u y=%u finger=%u", phase, x, y, finger);
+        DFHLOG(@"SendTouch ok phase=%d x=%u y=%u finger=%u (senderID set)", phase, x, y, finger);
         CFRelease(ev);
     } else {
         DFHLOG(@"SendTouch 失败: 所有创建函数返回 NULL");
