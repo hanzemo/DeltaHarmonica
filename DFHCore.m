@@ -120,15 +120,12 @@ static IOHIDEventSystemClientRef DFHSharedClient(void) {
     return client;
 }
 
-static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uint64_t ts) {
+static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint64_t ts) {
     IOHIDEventSystemClientRef client = DFHSharedClient();
-    if (!client) {
-        DFHLOG(@"SendTouch 失败: client=NULL");
-        return;
-    }
+    if (!client) return;
 
     Boolean isDown = (phase == kDFH_TouchPhase_Began);
-    uint32_t mask = isDown ? 0x07 : 0x06;
+    uint32_t mask = isDown ? 0x07 : 0x06;   /* down: Range|Touch|Position; up: Touch|Position */
     Boolean range = isDown ? 1 : 0;
     Boolean touch = isDown ? 1 : 0;
 
@@ -137,11 +134,9 @@ static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uin
     DFHFingerEventFn fingerFn = DFHCreateFingerEvent();
     if (fingerFn) {
         ev = fingerFn(kCFAllocatorDefault, ts, 0, finger, mask,
-                      (double)x, (double)y, 0.0, 0.0, 0.0,
+                      nx, ny, 0.0,
+                      0.0, 0.0,       /* tipPressure, twist 保持 0 */
                       range, touch, 0);
-        if (!ev) DFHLOG(@"FingerEvent 返回 NULL");
-    } else {
-        DFHLOG(@"IOHIDEventCreateDigitizerFingerEvent 符号未找到");
     }
 
     if (!ev) {
@@ -150,22 +145,18 @@ static void DFHSendTouch(uint32_t finger, int phase, uint32_t x, uint32_t y, uin
             ev = digiFn(kCFAllocatorDefault, ts,
                         0x00, 0, finger,
                         mask, 0,
-                        (double)x, (double)y, 0.0, 0.0, 0.0,
+                        nx, ny, 0.0, 0.0, 0.0,
                         range, touch, 0);
-            if (!ev) DFHLOG(@"DigitizerEvent 返回 NULL");
-        } else {
-            DFHLOG(@"IOHIDEventCreateDigitizerEvent 符号未找到");
         }
     }
 
-		if (ev) {
-        /* 关键：打上合法 SenderID，否则系统会静默丢弃合成触摸 */
+    if (ev) {
         IOHIDEventSetSenderID(ev, 0x8000000817319372ULL);
         IOHIDEventSystemClientDispatchEvent(client, ev);
-        DFHLOG(@"SendTouch ok phase=%d x=%u y=%u finger=%u (senderID set)", phase, x, y, finger);
+        DFHLOG(@"SendTouch ok phase=%d nx=%.3f ny=%.3f", phase, nx, ny);
         CFRelease(ev);
     } else {
-        DFHLOG(@"SendTouch 失败: 所有创建函数返回 NULL");
+        DFHLOG(@"SendTouch 失败: 事件创建返回 NULL");
     }
 }
 
@@ -181,18 +172,20 @@ static BOOL DFHShouldInject(void) {
 void DFHTapAtPoint(CGPoint point, double holdMs) {
     if (!DFHShouldInject()) return;
 
-    CGFloat scale = [UIScreen mainScreen].scale;
-    uint32_t x = (uint32_t)lround(point.x * scale);
-    uint32_t y = (uint32_t)lround(point.y * scale);
+    CGRect screen = [UIScreen mainScreen].bounds;
+    if (screen.size.width <= 1 || screen.size.height <= 1) return;
+
+    double nx = point.x / screen.size.width;    /* 0.0–1.0 */
+    double ny = point.y / screen.size.height;   /* 0.0–1.0 */
 
     uint64_t ts = mach_absolute_time();
-    DFHSendTouch(1, kDFH_TouchPhase_Began, x, y, ts);
+    DFHSendTouch(1, kDFH_TouchPhase_Began, nx, ny, ts);
 
     if (holdMs > 0.0) {
         usleep((useconds_t)(holdMs * 1000.0));
     }
 
-    DFHSendTouch(1, kDFH_TouchPhase_Range, x, y, mach_absolute_time());
+    DFHSendTouch(1, kDFH_TouchPhase_Range, nx, ny, mach_absolute_time());
 }
 
 void DFHTapKey(NSInteger keyIdx, double holdMs) {
