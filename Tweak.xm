@@ -667,12 +667,12 @@ static BOOL DFHIsPortrait(void) {
             if (scene.activationState != UISceneActivationStateForegroundActive) continue;
             if (![scene isKindOfClass:[UIWindowScene class]]) continue;
             if ([scene.session.role containsString:@"SystemAperture"]) continue;
-            UIInterfaceOrientation o = ((UIWindowScene *)scene).interfaceOrientation;
-            return (o == UIInterfaceOrientationPortrait ||
-                    o == UIInterfaceOrientationPortraitUpsideDown);
+            CGRect b = ((UIWindowScene *)scene).coordinateSpace.bounds;
+            return b.size.height > b.size.width;
         }
     }
-    return NO;
+    CGRect bounds = [UIScreen mainScreen].bounds;
+    return bounds.size.height > bounds.size.width;
 }
 
 static void DFHShowPanel(void) {
