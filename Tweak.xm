@@ -820,12 +820,6 @@ static BOOL DFHHandleVolumeDownFrom(const char *where) {
 
     if (!df) return NO;               /* 非三角洲：放行音量 */
 
-    /* 竖屏：不弹面板，放行音量 */
-    if (DFHIsPortrait()) {
-        DFHLOG(@"[%s] 竖屏，放行音量", where);
-        return NO;
-    }
-
     if (visible) {
         DFHHidePanel();
         DFHLOG(@"[%s] 面板可见 → 隐藏（播放继续）", where);
