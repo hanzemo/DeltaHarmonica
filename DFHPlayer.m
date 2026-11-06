@@ -403,10 +403,16 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
             hasPrevHalf = YES;
         }
 
-        double noteMs = (double)n.durationUs / 1000.0;
-        double holdMs = noteMs - 30.0;
-        if (holdMs < DFH_MIN_HOLD_MS) holdMs = DFH_MIN_HOLD_MS;
-        if (holdMs > DFH_MAX_HOLD_MS) holdMs = DFH_MAX_HOLD_MS;
+				double noteMs = (double)n.durationUs / 1000.0;
+				double holdMs;
+				if (noteMs >= 200.0) {
+				    holdMs = noteMs * 0.9;              /* 长音按 90% 时长 */
+				    if (holdMs < 60.0) holdMs = 60.0;   /* 最少 60ms，不设上限 */
+				} else {
+				    holdMs = noteMs - 30.0;
+				    if (holdMs < 30.0) holdMs = 30.0;
+				    if (holdMs > 60.0) holdMs = 60.0;   /* 短音 30~60ms */
+				}
 
         DFHTapKey(DFHNoteKeyForDegree(m.degree), holdMs);
 
