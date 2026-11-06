@@ -378,7 +378,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
         DFHPitchMap m = [DFHMIDIParser pitchMapFor:n.pitch];
         BOOL useIndependentHighDo = (m.degree == 8);
 
-        /* 切换键固定 finger=10，避免和音符键冲突 */
+        /* 音区切换键 finger=10（3 个音区键互斥，同一时刻只按一个） */
         if (!useIndependentHighDo && (!hasPrevReg || m.reg != lastReg)) {
             if (![self sleepUntilTimelineUs:noteStart token:token]) { [self finishRun:token]; return; }
             DFHTapKey(kDFHRegKey[m.reg], 50.0, 10);
@@ -387,14 +387,16 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
             hasPrevReg = YES;
         }
 
+        /* 半音键 finger=11，避免和音区切换键的 finger=10 冲突 */
         if (!useIndependentHighDo && (!hasPrevHalf || m.accidental != lastHalf)) {
             if (![self sleepUntilTimelineUs:noteStart token:token]) { [self finishRun:token]; return; }
-            DFHTapKey(kDFHHalfKey, 50.0, 10);
+            DFHTapKey(kDFHHalfKey, 50.0, 11);
             if (![self sleepUntilTimelineUs:noteStart + 80000 token:token]) { [self finishRun:token]; return; }
             lastHalf = m.accidental;
             hasPrevHalf = YES;
         }
 
+        /* 长音按 90% 时长（不设 60ms 上限），短音 30~60ms */
         double noteMs = (double)n.durationUs / 1000.0;
         double holdMs;
         if (noteMs >= 200.0) {
@@ -406,6 +408,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
             if (holdMs > 60.0) holdMs = 60.0;
         }
 
+        /* 音符键 finger 轮转 1–9，和 finger=10/11 的切换键错开 */
         uint32_t noteFinger = (uint32_t)((i % 9) + 1);
         DFHTapKey(DFHNoteKeyForDegree(m.degree), holdMs, noteFinger);
 
