@@ -191,8 +191,8 @@ void DFHTapAtPoint(CGPoint point, double holdMs) {
     CGRect screen = [UIScreen mainScreen].bounds;
     if (screen.size.width <= 1 || screen.size.height <= 1) return;
 
-    double nx = point.x / screen.size.width;    /* 0.0–1.0 */
-    double ny = point.y / screen.size.height;   /* 0.0–1.0 */
+    double nx = point.x / screen.size.width;
+    double ny = point.y / screen.size.height;
 
     /* 钳制 0.0–1.0，防止超界坐标被系统丢弃 */
     if (nx < 0.0) nx = 0.0;
@@ -204,12 +204,16 @@ void DFHTapAtPoint(CGPoint point, double holdMs) {
     DFHSendTouch(1, kDFH_TouchPhase_Began, nx, ny, ts);
 
     if (holdMs > 0.0) {
-        usleep((useconds_t)(holdMs * 1000.0));
+        /* 异步抬起，不阻塞 DFHPlayer 播放队列 */
+        double nxCopy = nx, nyCopy = ny;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(holdMs * NSEC_PER_MSEC)),
+                       dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+            DFHSendTouch(1, kDFH_TouchPhase_Range, nxCopy, nyCopy, mach_absolute_time());
+        });
+    } else {
+        DFHSendTouch(1, kDFH_TouchPhase_Range, nx, ny, mach_absolute_time());
     }
-
-    DFHSendTouch(1, kDFH_TouchPhase_Range, nx, ny, mach_absolute_time());
 }
-
 void DFHTapKey(NSInteger keyIdx, double holdMs) {
     BOOL valid = NO;
     CGPoint p = DFHLoadCoord(keyIdx, &valid);
