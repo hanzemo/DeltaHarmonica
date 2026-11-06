@@ -9,19 +9,18 @@
 /* =====================================================================
  * DFHCore.m — 核心实现（SpringBoard 注入版）
  *
- * 触摸注入原理（方案 B：只注入 SpringBoard，不碰游戏）：
- *   《三角洲行动》为 Unity 引擎游戏，触摸走 IOHIDEvent。
- *   SpringBoard 是系统级进程，可通过 IOHIDEventSystemClient 的全局派发
- *   把合成触摸投递到"当前前台 App"（即游戏），全程不对游戏二进制做注入。
+ * 触摸注入：
+ *   在 SpringBoard 内构造 IOHIDEvent，通过 IOHIDEventSystemClient 全局派发
+ *   到当前前台 App（游戏）。真实触摸是 Parent（Digitizer）+ Child（Finger）
+ *   成对出现的，必须 IOHIDEventAppendEvent 挂 child 到 parent，再派发 parent。
  *
  * 符号兼容（iOS 14/15/16）：
- *   IOHIDEventCreateDigitizerEvent 在 iOS 14+ 为 15 参（x/y/z/pressure/twist
- *   为 IOHIDFloat），旧 14 参声明会导致调用栈错位、事件静默失败。
- *   这里用 dlopen + dlsym 运行时查找，避免编译期签名不匹配。
+ *   IOHIDEventCreateDigitizerEvent 是 15 参（x/y/z/pressure/twist 为 IOHIDFloat），
+ *   用 dlopen + dlsym 运行时查找，避免编译期签名不匹配。
+ *   优先 IOHIDEventCreateDigitizerFingerEvent（13 参，更稳）。
  *
- * 关键修复：真实触摸是 Parent（Digitizer）+ Child（Finger）成对出现的。
- *   单独派发 Finger 事件会被系统丢弃，必须用 IOHIDEventAppendEvent
- *   把 Child 挂到 Parent 上，再派发 Parent。
+ * 多指：
+ *   finger 参数区分不同手指（1–9 音符键，10 切换键），按下/抬起用同一 finger。
  * ===================================================================== */
 
 /* ---------------- Debug 宏（写文件） ---------------- */
@@ -41,16 +40,13 @@ extern void IOHIDEventSystemClientDispatchEvent(IOHIDEventSystemClientRef client
 extern void IOHIDEventSetSenderID(IOHIDEventRef event, uint64_t senderID);
 extern void IOHIDEventAppendEvent(IOHIDEventRef parent, IOHIDEventRef child);
 extern void IOHIDEventSetIntegerValue(IOHIDEventRef event, uint32_t field, int value);
-extern void IOHIDEventSetFloatValue(IOHIDEventRef event, uint32_t field, double value);
 
 /* 事件阶段常量 */
 #define kDFH_TouchPhase_Began 0x01
 #define kDFH_TouchPhase_Range 0x04
 
 /* IOHID 字段常量 */
-#define kDFH_FieldDigitizerMajorRadius 0x08
-#define kDFH_FieldDigitizerMinorRadius 0x09
-#define kDFH_FieldDigitizerIsDisplayIntegrated 0x0B
+#define kDFH_FieldDigitizerIsDisplayIntegrated 0x0000000B
 
 /* ---------- 运行时符号查找 ---------- */
 typedef IOHIDEventRef (*DFHFingerEventFn)(CFAllocatorRef, uint64_t,
@@ -140,7 +136,7 @@ static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint6
     Boolean range = isDown ? 1 : 0;
     Boolean touch = isDown ? 1 : 0;
 
-    /* 1. 创建 child（Finger） */
+    /* 1. 创建 child（Finger），identity 用 finger 区分多指 */
     IOHIDEventRef child = NULL;
     DFHFingerEventFn fingerFn = DFHCreateFingerEvent();
     if (fingerFn) {
@@ -150,9 +146,6 @@ static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint6
     }
     if (!child) { DFHLOG(@"SendTouch: child=NULL"); return; }
 
-    IOHIDEventSetFloatValue(child, kDFH_FieldDigitizerMajorRadius, 0.04);
-    IOHIDEventSetFloatValue(child, kDFH_FieldDigitizerMinorRadius, 0.04);
-
     /* 2. 创建 parent（Digitizer） */
     DFHDigitizerEventFn digiFn = DFHCreateDigitizerEvent();
     if (!digiFn) { DFHLOG(@"SendTouch: digiFn=NULL"); CFRelease(child); return; }
@@ -160,7 +153,7 @@ static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint6
     IOHIDEventRef parent = digiFn(kCFAllocatorDefault, ts,
                                   0, 0, finger,
                                   mask, 0,
-                                  0.0, 0.0, 0.0, 0.0, 0.0,
+                                  nx, ny, 0.0, 0.0, 0.0,
                                   range, touch, 0);
     if (!parent) { DFHLOG(@"SendTouch: parent=NULL"); CFRelease(child); return; }
 
@@ -172,7 +165,7 @@ static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint6
     /* 4. SenderID + 派发 parent */
     IOHIDEventSetSenderID(parent, 0x8000000817319372ULL);
     IOHIDEventSystemClientDispatchEvent(client, parent);
-    DFHLOG(@"SendTouch ok phase=%d nx=%.3f ny=%.3f", phase, nx, ny);
+    DFHLOG(@"SendTouch ok phase=%d nx=%.3f ny=%.3f finger=%u", phase, nx, ny, finger);
     CFRelease(parent);
 }
 
@@ -185,7 +178,7 @@ static BOOL DFHShouldInject(void) {
     return ok;
 }
 
-void DFHTapAtPoint(CGPoint point, double holdMs) {
+void DFHTapAtPoint(CGPoint point, double holdMs, uint32_t finger) {
     if (!DFHShouldInject()) return;
 
     CGRect screen = [UIScreen mainScreen].bounds;
@@ -193,34 +186,34 @@ void DFHTapAtPoint(CGPoint point, double holdMs) {
 
     double nx = point.x / screen.size.width;
     double ny = point.y / screen.size.height;
-
-    /* 钳制 0.0–1.0，防止超界坐标被系统丢弃 */
     if (nx < 0.0) nx = 0.0;
     if (nx > 1.0) nx = 1.0;
     if (ny < 0.0) ny = 0.0;
     if (ny > 1.0) ny = 1.0;
 
     uint64_t ts = mach_absolute_time();
-    DFHSendTouch(1, kDFH_TouchPhase_Began, nx, ny, ts);
+    DFHSendTouch(finger, kDFH_TouchPhase_Began, nx, ny, ts);
 
     if (holdMs > 0.0) {
-        /* 异步抬起，不阻塞 DFHPlayer 播放队列 */
         double nxCopy = nx, nyCopy = ny;
+        uint32_t f = finger;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(holdMs * NSEC_PER_MSEC)),
                        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
-            DFHSendTouch(1, kDFH_TouchPhase_Range, nxCopy, nyCopy, mach_absolute_time());
+            DFHSendTouch(f, kDFH_TouchPhase_Range, nxCopy, nyCopy, mach_absolute_time());
         });
     } else {
-        DFHSendTouch(1, kDFH_TouchPhase_Range, nx, ny, mach_absolute_time());
+        DFHSendTouch(finger, kDFH_TouchPhase_Range, nx, ny, mach_absolute_time());
     }
 }
-void DFHTapKey(NSInteger keyIdx, double holdMs) {
+
+void DFHTapKey(NSInteger keyIdx, double holdMs, uint32_t finger) {
     BOOL valid = NO;
     CGPoint p = DFHLoadCoord(keyIdx, &valid);
     if (!valid) {
         DFHLOG(@"键 %ld 未标定，跳过", (long)keyIdx);
         return;
     }
-    DFHLOG(@"TapKey %ld at (%.1f, %.1f) hold=%.1f", (long)keyIdx, p.x, p.y, holdMs);
-    DFHTapAtPoint(p, holdMs);
+    DFHLOG(@"TapKey %ld at (%.1f, %.1f) hold=%.1f finger=%u",
+           (long)keyIdx, p.x, p.y, holdMs, finger);
+    DFHTapAtPoint(p, holdMs, finger);
 }
