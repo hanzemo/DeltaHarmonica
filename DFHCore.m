@@ -18,7 +18,10 @@
  *   IOHIDEventCreateDigitizerEvent 在 iOS 14+ 为 15 参（x/y/z/pressure/twist
  *   为 IOHIDFloat），旧 14 参声明会导致调用栈错位、事件静默失败。
  *   这里用 dlopen + dlsym 运行时查找，避免编译期签名不匹配。
- *   优先用 IOHIDEventCreateDigitizerFingerEvent（13 参，更稳）。
+ *
+ * 关键修复：真实触摸是 Parent（Digitizer）+ Child（Finger）成对出现的。
+ *   单独派发 Finger 事件会被系统丢弃，必须用 IOHIDEventAppendEvent
+ *   把 Child 挂到 Parent 上，再派发 Parent。
  * ===================================================================== */
 
 /* ---------------- Debug 宏（写文件） ---------------- */
@@ -36,10 +39,18 @@ typedef struct __IOHIDEventSystemClient *IOHIDEventSystemClientRef;
 extern IOHIDEventSystemClientRef IOHIDEventSystemClientCreate(CFAllocatorRef allocator);
 extern void IOHIDEventSystemClientDispatchEvent(IOHIDEventSystemClientRef client, IOHIDEventRef event);
 extern void IOHIDEventSetSenderID(IOHIDEventRef event, uint64_t senderID);
+extern void IOHIDEventAppendEvent(IOHIDEventRef parent, IOHIDEventRef child);
+extern void IOHIDEventSetIntegerValue(IOHIDEventRef event, uint32_t field, int value);
+extern void IOHIDEventSetFloatValue(IOHIDEventRef event, uint32_t field, double value);
 
 /* 事件阶段常量 */
 #define kDFH_TouchPhase_Began 0x01
 #define kDFH_TouchPhase_Range 0x04
+
+/* IOHID 字段常量（来自 IOHIDPrivate.h） */
+#define kDFH_FieldDigitizerIsDisplayIntegrated 0x0000000B
+#define kDFH_FieldDigitizerMajorRadius 0x00000008
+#define kDFH_FieldDigitizerMinorRadius 0x00000009
 
 /* ---------- 运行时符号查找 ---------- */
 typedef IOHIDEventRef (*DFHFingerEventFn)(CFAllocatorRef, uint64_t,
@@ -122,42 +133,67 @@ static IOHIDEventSystemClientRef DFHSharedClient(void) {
 
 static void DFHSendTouch(uint32_t finger, int phase, double nx, double ny, uint64_t ts) {
     IOHIDEventSystemClientRef client = DFHSharedClient();
-    if (!client) return;
+    if (!client) {
+        DFHLOG(@"SendTouch 失败: client=NULL");
+        return;
+    }
 
     Boolean isDown = (phase == kDFH_TouchPhase_Began);
     uint32_t mask = isDown ? 0x07 : 0x06;   /* down: Range|Touch|Position; up: Touch|Position */
     Boolean range = isDown ? 1 : 0;
     Boolean touch = isDown ? 1 : 0;
 
-    IOHIDEventRef ev = NULL;
+    IOHIDEventRef child = NULL;
 
     DFHFingerEventFn fingerFn = DFHCreateFingerEvent();
     if (fingerFn) {
-        ev = fingerFn(kCFAllocatorDefault, ts, 0, finger, mask,
-                      nx, ny, 0.0,
-                      0.0, 0.0,       /* tipPressure, twist 保持 0 */
-                      range, touch, 0);
+        child = fingerFn(kCFAllocatorDefault, ts, 0, finger, mask,
+                         nx, ny, 0.0,
+                         0.0, 0.0,       /* tipPressure, twist 保持 0 */
+                         range, touch, 0);
     }
 
-    if (!ev) {
-        DFHDigitizerEventFn digiFn = DFHCreateDigitizerEvent();
-        if (digiFn) {
-            ev = digiFn(kCFAllocatorDefault, ts,
-                        0x00, 0, finger,
-                        mask, 0,
-                        nx, ny, 0.0, 0.0, 0.0,
-                        range, touch, 0);
-        }
+    if (!child) {
+        DFHLOG(@"SendTouch 失败: FingerEvent 创建返回 NULL");
+        return;
     }
 
-    if (ev) {
-        IOHIDEventSetSenderID(ev, 0x8000000817319372ULL);
-        IOHIDEventSystemClientDispatchEvent(client, ev);
-        DFHLOG(@"SendTouch ok phase=%d nx=%.3f ny=%.3f", phase, nx, ny);
-        CFRelease(ev);
-    } else {
-        DFHLOG(@"SendTouch 失败: 事件创建返回 NULL");
+    /* 设置子事件的触摸半径，部分系统需要 */
+    IOHIDEventSetFloatValue(child, kDFH_FieldDigitizerMajorRadius, 0.04f);
+    IOHIDEventSetFloatValue(child, kDFH_FieldDigitizerMinorRadius, 0.04f);
+
+    /* 创建父事件（Digitizer），并把子事件挂上去 */
+    DFHDigitizerEventFn digiFn = DFHCreateDigitizerEvent();
+    if (!digiFn) {
+        DFHLOG(@"SendTouch 失败: DigitizerEvent 符号未找到");
+        CFRelease(child);
+        return;
     }
+
+    IOHIDEventRef parent = digiFn(kCFAllocatorDefault, ts,
+                                  0x00, 0, finger,   /* transducerType=0, index=0, identity=finger */
+                                  mask, 0,
+                                  0.0, 0.0, 0.0, 0.0, 0.0,  /* 父事件坐标可置 0，子事件携带实际坐标 */
+                                  range, touch, 0);
+    if (!parent) {
+        DFHLOG(@"SendTouch 失败: ParentEvent 创建返回 NULL");
+        CFRelease(child);
+        return;
+    }
+
+    /* 标记为屏幕集成触摸（SpringBoard 注入必需） */
+    IOHIDEventSetIntegerValue(parent, kDFH_FieldDigitizerIsDisplayIntegrated, 1);
+
+    /* 把子事件挂到父事件上 */
+    IOHIDEventAppendEvent(parent, child);
+    CFRelease(child);
+
+    /* 打上合法 SenderID，系统才会接受 */
+    IOHIDEventSetSenderID(parent, 0x8000000817319372ULL);
+
+    IOHIDEventSystemClientDispatchEvent(client, parent);
+    DFHLOG(@"SendTouch ok phase=%d nx=%.3f ny=%.3f", phase, nx, ny);
+    CFRelease(parent);
 }
 
 /* 白名单护栏：仅当前台 App 是三角洲时才允许派发触摸 */
@@ -177,6 +213,12 @@ void DFHTapAtPoint(CGPoint point, double holdMs) {
 
     double nx = point.x / screen.size.width;    /* 0.0–1.0 */
     double ny = point.y / screen.size.height;   /* 0.0–1.0 */
+
+    /* 钳制 0.0–1.0，防止超界坐标被系统丢弃 */
+    if (nx < 0.0) nx = 0.0;
+    if (nx > 1.0) nx = 1.0;
+    if (ny < 0.0) ny = 0.0;
+    if (ny > 1.0) ny = 1.0;
 
     uint64_t ts = mach_absolute_time();
     DFHSendTouch(1, kDFH_TouchPhase_Began, nx, ny, ts);
