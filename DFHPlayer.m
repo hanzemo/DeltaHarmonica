@@ -7,23 +7,23 @@
  * DFHPlayer.m
  * 演奏调度器实现
  *
- * 时序策略：
- *  用 dispatch 后台串行队列 + 每步 sleep 前计算"下一个事件绝对时间"，
- *  派发按键。mach_absolute_time 经 mach_timebase_info 精确换算为 us，
- *  再除以 rate 得到实际等待时间（倍速）。
+ * 时序：dispatch 后台串行队列 + 绝对时间基准（mach_absolute_time），
+ *  mach_timebase_info 精确换算 us，再除以 rate 得到实际等待（倍速）。
  *
- * 线程安全：
- *  _cancel / _paused / _playing / _rate / _currentUs / _totalUs / _runToken
- *  全部在 @synchronized(self) 下读写。
- *  runResult: 在后台队列运行，只读局部快照，写状态时进同步块。
+ * 线程安全：_cancel / _paused / _playing / _rate / _currentUs / _totalUs /
+ *  _runToken 全部 @synchronized(self) 保护。
  *
- * 进度尺度：
- *  内部 _notes 是「BPM 归一化到 120」后的副本（startUs/durationUs 已缩放），
+ * 进度尺度：内部 _notes 是「BPM 归一化到 120」后的副本，
  *  _totalUs = result.totalDurationUs / tempoScale。
  *  对外 onProgress / seekToUs: / currentUs / lastPlayedUs 全部用此尺度。
+ *
+ * 长按：noteMs >= 200ms 时按住 noteMs * 0.9（与安卓对齐），
+ *  不设 60ms 上限；短音 30~60ms。抬起异步发，不阻塞播放队列。
+ *
+ * 多指：切换键固定 finger=10，音符键轮转 1–9，按下/抬起同一 finger。
  * ===================================================================== */
 
-/* ---------------- DFHLOG（与 Tweak.xm 一致，已知坑 3） ---------------- */
+/* ---------------- DFHLOG（与 Tweak.xm 一致） ---------------- */
 #define DFHLOG(fmt, ...) do { \
     NSString *s = [NSString stringWithFormat:@"[DFH] " fmt "\n", ##__VA_ARGS__]; \
     NSString *p = @"/var/mobile/Documents/dfh.log"; \
@@ -48,13 +48,11 @@ static NSInteger DFHNoteKeyForDegree(int degree) {
     return 0;
 }
 
-/* ---------------- mach_timebase 精确换算（已知坑 1） ---------------- */
+/* ---------------- mach_timebase 精确换算 ---------------- */
 static uint64_t DFHTicksToUs(uint64_t ticks) {
     static mach_timebase_info_data_t tb;
     static dispatch_once_t once;
     dispatch_once(&once, ^{ mach_timebase_info(&tb); });
-    /* ticks * numer / denom = 纳秒；再 /1000 = 微秒。
-     * 先乘后除避免精度损失；用 __uint128_t 防溢出。 */
     __uint128_t ns = (__uint128_t)ticks * tb.numer / tb.denom;
     return (uint64_t)(ns / 1000);
 }
@@ -150,7 +148,6 @@ static NSString * const kDFHKeyLastPlayedUs = @"lastPlayedUs";
         cur = _currentUs;
     }
     if (playing) {
-        /* 从当前位置重建时间基准，不停播 */
         [self seekToUs:cur];
     }
 }
@@ -216,6 +213,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
            (unsigned long long)(outTotalUs ? *outTotalUs : 0));
     return out;
 }
+
 /* ------------------------------------------------------------------
  * 播放入口
  * ------------------------------------------------------------------ */
@@ -266,7 +264,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
         rate = _rate;
         if (!playing || notes.count == 0) return;
         if (us > total) us = total;
-        _cancel = YES;            /* 旧 run 退出 */
+        _cancel = YES;
         _runToken++;
         _currentUs = us;
         _runBaseUs = us;
@@ -289,7 +287,6 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
 
 /* ------------------------------------------------------------------
  * 实时等待：绝对时钟校准 + 暂停 + 倍速
- * 目标时间轴 us -> 实际等待 (targetUs - baseUs) / rate
  * ------------------------------------------------------------------ */
 
 - (BOOL)sleepUntilTimelineUs:(uint64_t)targetUs token:(NSUInteger)token {
@@ -315,13 +312,11 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
 
         uint64_t nowTicks = mach_absolute_time();
         uint64_t elapsedUs = DFHTicksToUs(nowTicks - startTicks);
-        /* 时间轴已走 = baseUs + elapsedUs * rate */
         uint64_t walkedUs = baseUs + (uint64_t)((double)elapsedUs * rate);
 
         if (walkedUs >= targetUs) return YES;
 
         uint64_t remainTimelineUs = targetUs - walkedUs;
-        /* 换算实际等待：remainTimelineUs / rate */
         double remainRealUs = (double)remainTimelineUs / rate;
         uint32_t sleepUs = (uint32_t)MIN((uint64_t)remainRealUs, 50000ULL);
         if (sleepUs == 0) sleepUs = 1;
@@ -333,6 +328,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
     uint64_t total = 0;
     @synchronized (self) {
         if (_runToken != token) return;
+        if (!_playing) return;
         _currentUs = us;
         total = _totalUs;
     }
@@ -364,13 +360,9 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
 
     for (NSUInteger i = 0; i < notes.count; i++) {
         DFHNoteEvent *n = notes[i];
-        /* 跳过 fromUs 之前的音符（seek 时） */
         if (n.startUs + n.durationUs <= fromUs) {
             DFHPitchMap m0 = [DFHMIDIParser pitchMapFor:n.pitch];
             if (m0.degree != 8) {
-                if (!hasPrevReg || m0.reg != lastReg) {
-                    /* 不注入，仅记录状态，保证首个可发音符音区正确 */
-                }
                 lastReg = m0.reg;
                 lastHalf = m0.accidental;
                 hasPrevReg = YES;
@@ -378,7 +370,6 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
             }
             continue;
         }
-        /* 起始在 fromUs 之前但未结束的音符：从 fromUs 起播 */
         uint64_t noteStart = n.startUs;
         if (noteStart < fromUs) noteStart = fromUs;
 
@@ -387,9 +378,10 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
         DFHPitchMap m = [DFHMIDIParser pitchMapFor:n.pitch];
         BOOL useIndependentHighDo = (m.degree == 8);
 
+        /* 切换键固定 finger=10，避免和音符键冲突 */
         if (!useIndependentHighDo && (!hasPrevReg || m.reg != lastReg)) {
             if (![self sleepUntilTimelineUs:noteStart token:token]) { [self finishRun:token]; return; }
-            DFHTapKey(kDFHRegKey[m.reg], 50.0);
+            DFHTapKey(kDFHRegKey[m.reg], 50.0, 10);
             if (![self sleepUntilTimelineUs:noteStart + 120000 token:token]) { [self finishRun:token]; return; }
             lastReg = m.reg;
             hasPrevReg = YES;
@@ -397,24 +389,25 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
 
         if (!useIndependentHighDo && (!hasPrevHalf || m.accidental != lastHalf)) {
             if (![self sleepUntilTimelineUs:noteStart token:token]) { [self finishRun:token]; return; }
-            DFHTapKey(kDFHHalfKey, 50.0);
+            DFHTapKey(kDFHHalfKey, 50.0, 10);
             if (![self sleepUntilTimelineUs:noteStart + 80000 token:token]) { [self finishRun:token]; return; }
             lastHalf = m.accidental;
             hasPrevHalf = YES;
         }
 
-				double noteMs = (double)n.durationUs / 1000.0;
-				double holdMs;
-				if (noteMs >= 200.0) {
-				    holdMs = noteMs * 0.9;              /* 长音按 90% 时长 */
-				    if (holdMs < 60.0) holdMs = 60.0;   /* 最少 60ms，不设上限 */
-				} else {
-				    holdMs = noteMs - 30.0;
-				    if (holdMs < 30.0) holdMs = 30.0;
-				    if (holdMs > 60.0) holdMs = 60.0;   /* 短音 30~60ms */
-				}
+        double noteMs = (double)n.durationUs / 1000.0;
+        double holdMs;
+        if (noteMs >= 200.0) {
+            holdMs = noteMs * 0.9;
+            if (holdMs < 60.0) holdMs = 60.0;
+        } else {
+            holdMs = noteMs - 30.0;
+            if (holdMs < 30.0) holdMs = 30.0;
+            if (holdMs > 60.0) holdMs = 60.0;
+        }
 
-        DFHTapKey(DFHNoteKeyForDegree(m.degree), holdMs);
+        uint32_t noteFinger = (uint32_t)((i % 9) + 1);
+        DFHTapKey(DFHNoteKeyForDegree(m.degree), holdMs, noteFinger);
 
         uint64_t noteEnd = n.startUs + n.durationUs;
         [self updateCurrentUs:noteEnd token:token];
@@ -427,7 +420,7 @@ static NSArray<DFHNoteEvent *> *DFHNormalizeNotes(DFHMIDIResult *result, uint64_
 - (void)finishRun:(NSUInteger)token {
     BOOL wasPlaying = NO;
     @synchronized (self) {
-        if (_runToken != token) return;   /* 已被 seek/stop 取代 */
+        if (_runToken != token) return;
         if (_playing) {
             wasPlaying = YES;
             _playing = NO;
