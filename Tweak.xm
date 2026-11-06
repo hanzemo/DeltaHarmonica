@@ -229,8 +229,10 @@ static UIWindow *gDFHWindow = nil;
 }
 
 - (void)startPickForIndex:(NSInteger)idx {
+    /* 标定时隐藏面板 */
     if (gDFHWindow) gDFHWindow.hidden = YES;
 
+    /* 选游戏所在场景，取横屏 bounds */
     CGRect r = [UIScreen mainScreen].bounds;
     UIWindowScene *targetScene = nil;
     if (@available(iOS 13.0, *)) {
@@ -244,18 +246,23 @@ static UIWindow *gDFHWindow = nil;
             }
         }
     }
-		if (targetScene) r = targetScene.coordinateSpace.bounds;
-		/* 强制横屏 */
-		if (r.size.height > r.size.width) {
-		    r = CGRectMake(0, 0, r.size.height, r.size.width);
-		}
-		UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
-    if (targetScene) pickerWin.windowScene = targetScene;
+    if (targetScene) r = targetScene.coordinateSpace.bounds;
+    /* 强制横屏 */
+    if (r.size.height > r.size.width) {
+        r = CGRectMake(0, 0, r.size.height, r.size.width);
+    }
+    DFHLOG(@"pickerWin frame=%@", NSStringFromCGRect(r));
+
+    UIWindow *pickerWin = [[UIWindow alloc] initWithFrame:r];
+    if (targetScene) {
+        pickerWin.windowScene = targetScene;
+    }
     pickerWin.windowLevel = UIWindowLevelAlert + 2000;
     pickerWin.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
 
     UIViewController *picker = [UIViewController new];
     picker.view.backgroundColor = [UIColor clearColor];
+    picker.view.frame = r;   /* 强制 picker.view 撑满横屏 */
     pickerWin.rootViewController = picker;
     pickerWin.hidden = NO;
 
@@ -279,7 +286,7 @@ static UIWindow *gDFHWindow = nil;
 - (void)handlePickTap:(UITapGestureRecognizer *)tap {
     NSNumber *idxNum = objc_getAssociatedObject(tap, "idx");
     NSInteger idx = idxNum.integerValue;
-    CGPoint p = [tap locationInView:nil];
+    CGPoint p = [tap locationInView:tap.view];
     DFHStoreCoord(idx, p);
     DFHLOG(@"标定 %@ → %.0f, %.0f", DFHKeyNames()[idx], p.x, p.y);
 
@@ -721,16 +728,18 @@ static void DFHShowPanel(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!gDFHWindow) {
             CGRect r = [UIScreen mainScreen].bounds;
-            UIWindowScene *targetScene = nil;
-            if (@available(iOS 13.0, *)) {
-                for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-                    if (scene.activationState != UISceneActivationStateForegroundActive) continue;
-                    if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-                    if ([scene.session.role containsString:@"SystemAperture"]) continue;
-                    targetScene = (UIWindowScene *)scene;
-                    break;
-                }
-            }
+						 UIWindowScene *targetScene = nil;
+						 if (@available(iOS 13.0, *)) {
+						     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+						         if (scene.activationState != UISceneActivationStateForegroundActive) continue;
+						         if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+						         if ([scene.session.role containsString:@"SystemAperture"]) continue;
+						         if ([scene.session.role containsString:@"Application"]) {
+						             targetScene = (UIWindowScene *)scene;
+						             break;
+						         }
+						     }
+			 		  }
 						if (targetScene) {
 				    r = targetScene.coordinateSpace.bounds;
 						 }
