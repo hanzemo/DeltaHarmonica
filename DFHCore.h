@@ -68,10 +68,8 @@ BOOL   DFHStoreCoord(NSInteger keyIdx, CGPoint p);
 CGPoint DFHLoadCoord(NSInteger keyIdx, BOOL * _Nullable valid);
 
 /* 触摸注入：点击某编号键（内部读标定坐标），holdMs 为按住时长 */
-void DFHTapKey(NSInteger keyIdx, double holdMs);
-
-/* 触摸注入：点击某逻辑坐标 */
-void DFHTapAtPoint(CGPoint point, double holdMs);
+void DFHTapKey(NSInteger keyIdx, double holdMs, uint32_t finger);
+void DFHTapAtPoint(CGPoint point, double holdMs, uint32_t finger);
 
 NS_ASSUME_NONNULL_END
 
